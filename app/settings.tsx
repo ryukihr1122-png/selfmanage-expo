@@ -1,49 +1,116 @@
 /**
- * 設定画面
+ * 設定画面（ローカルファースト版）
+ *
+ * - バックアップ / リストア
+ * - オンボーディング再設定
+ * - 法的情報
+ * - データリセット
  */
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { View, Text, ScrollView, Alert, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
-import { useAuth } from "@/contexts/AuthContext";
-import { api } from "@/lib/api";
+import { getProfile, type Profile } from "@/db/repository";
+import {
+  shareBackup,
+  restoreFromFile,
+  getLastBackupDate,
+} from "@/db/backup";
 import { RPGBox } from "@/components/RPGBox";
 import { RPGButton } from "@/components/RPGButton";
 import { Colors, FontSize, Spacing } from "@/constants/theme";
 
 export default function SettingsScreen() {
-  const { user, logout } = useAuth();
   const router = useRouter();
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [backing, setBacking] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
-  const handleLogout = () => {
-    Alert.alert("ログアウト", "ログアウトしますか？", [
-      { text: "キャンセル", style: "cancel" },
-      {
-        text: "ログアウト",
-        onPress: async () => {
-          await logout();
-          router.replace("/(auth)/login");
-        },
-      },
-    ]);
+  useEffect(() => {
+    getProfile().then(setProfile).catch(() => {});
+    getLastBackupDate().then(setLastBackup).catch(() => {});
+  }, []);
+
+  const handleBackup = async () => {
+    setBacking(true);
+    try {
+      await shareBackup();
+      const date = await getLastBackupDate();
+      setLastBackup(date);
+      Alert.alert("バックアップ完了", "ファイルを保存・共有してください");
+    } catch (err) {
+      Alert.alert("エラー", err instanceof Error ? err.message : "バックアップに失敗");
+    } finally {
+      setBacking(false);
+    }
   };
 
-  const handleDeleteAccount = () => {
+  const handleRestore = async () => {
     Alert.alert(
-      "アカウント削除",
-      "この操作は取り消せません。すべてのデータが削除されます。",
+      "データの復元",
+      "現在のデータはすべて上書きされます。続行しますか？",
       [
         { text: "キャンセル", style: "cancel" },
         {
-          text: "削除する",
-          style: "destructive",
+          text: "復元する",
           onPress: async () => {
+            setRestoring(true);
             try {
-              await api.deleteAccount();
-              await logout();
-              router.replace("/(auth)/login");
+              await restoreFromFile();
+              const p = await getProfile();
+              setProfile(p);
+              Alert.alert("復元完了", "データを復元しました。アプリを再起動してください。");
             } catch (err) {
-              Alert.alert("エラー", err instanceof Error ? err.message : "削除に失敗");
+              Alert.alert("エラー", err instanceof Error ? err.message : "復元に失敗");
+            } finally {
+              setRestoring(false);
             }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleResetData = () => {
+    Alert.alert(
+      "データをリセット",
+      "すべてのデータが削除されます。この操作は取り消せません。",
+      [
+        { text: "キャンセル", style: "cancel" },
+        {
+          text: "リセットする",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert("確認", "本当にリセットしますか？", [
+              { text: "キャンセル", style: "cancel" },
+              {
+                text: "はい、リセットする",
+                style: "destructive",
+                onPress: async () => {
+                  try {
+                    // DB削除 → アプリ再起動を促す
+                    const { getDB } = await import("@/db/repository");
+                    const db = await getDB();
+                    await db.execAsync(`
+                      DELETE FROM task_events;
+                      DELETE FROM daily_tasks;
+                      DELETE FROM recurring_tasks;
+                      DELETE FROM user_items;
+                      DELETE FROM user_titles;
+                      DELETE FROM pt_events;
+                      DELETE FROM login_bonuses;
+                      DELETE FROM ad_reward_logs;
+                      DELETE FROM daily_challenges;
+                      DELETE FROM onboarding;
+                      UPDATE profile SET total_xp = 0, level = 1, points = 0, streak_days = 0, last_qualified_date = NULL, active_title = NULL WHERE id = 1;
+                    `);
+                    Alert.alert("リセット完了", "アプリを再起動してください。");
+                  } catch (err) {
+                    Alert.alert("エラー", err instanceof Error ? err.message : "リセットに失敗");
+                  }
+                },
+              },
+            ]);
           },
         },
       ],
@@ -52,25 +119,50 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
+      {/* プロフィール情報 */}
       <RPGBox>
         <Text style={styles.label}>冒険者名</Text>
-        <Text style={styles.value}>{user?.displayName ?? "-"}</Text>
+        <Text style={styles.value}>{profile?.displayName ?? "冒険者"}</Text>
       </RPGBox>
 
       <RPGBox>
-        <Text style={styles.label}>メールアドレス</Text>
-        <Text style={styles.value}>{user?.email ?? "-"}</Text>
+        <Text style={styles.label}>レベル</Text>
+        <Text style={styles.value}>Lv.{profile?.level ?? 1}（{profile?.totalXp ?? 0} EXP）</Text>
       </RPGBox>
 
+      {/* 習慣設定 */}
       <RPGButton
-        title="オンボーディングを再設定"
+        title="習慣を再設定"
         variant="secondary"
         onPress={() => router.push("/onboarding")}
         icon="🌟"
       />
 
-      <RPGButton title="ログアウト" variant="secondary" onPress={handleLogout} icon="🚪" />
+      {/* バックアップ・リストア */}
+      <RPGBox style={{ gap: 12 }}>
+        <Text style={styles.sectionTitle}>💾 バックアップ</Text>
+        <Text style={styles.dim}>
+          {lastBackup
+            ? `前回のバックアップ: ${lastBackup}`
+            : "まだバックアップしていません"}
+        </Text>
+        <RPGButton
+          title="データをエクスポート"
+          variant="secondary"
+          onPress={handleBackup}
+          loading={backing}
+          icon="📤"
+        />
+        <RPGButton
+          title="データをインポート（復元）"
+          variant="secondary"
+          onPress={handleRestore}
+          loading={restoring}
+          icon="📥"
+        />
+      </RPGBox>
 
+      {/* 法的情報 */}
       <RPGBox>
         <Text style={styles.sectionTitle}>法的情報</Text>
         <RPGButton
@@ -87,11 +179,12 @@ export default function SettingsScreen() {
         />
       </RPGBox>
 
+      {/* データリセット */}
       <View style={{ marginTop: 40 }}>
         <RPGButton
-          title="アカウントを削除"
+          title="データをリセット"
           variant="danger"
-          onPress={handleDeleteAccount}
+          onPress={handleResetData}
         />
       </View>
     </ScrollView>
@@ -103,5 +196,6 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 40 },
   label: { fontSize: FontSize.sm, color: Colors.dim, marginBottom: 4 },
   value: { fontSize: FontSize.base, color: Colors.text, fontWeight: "500" },
-  sectionTitle: { fontSize: FontSize.base, fontWeight: "700", color: Colors.text, marginBottom: 8 },
+  dim: { fontSize: FontSize.sm, color: Colors.dim },
+  sectionTitle: { fontSize: FontSize.base, fontWeight: "700", color: Colors.text, marginBottom: 4 },
 });

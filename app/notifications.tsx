@@ -1,63 +1,46 @@
 /**
- * 通知一覧画面
+ * 通知設定画面（ローカルファースト版）
+ *
+ * サーバーからの通知一覧は不要。
+ * ローカル通知の設定のみ表示。
  */
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
+import { View, Text, ScrollView, StyleSheet, Alert } from "react-native";
+import * as Notifications from "expo-notifications";
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  RefreshControl,
-  StyleSheet,
-} from "react-native";
-import { api } from "@/lib/api";
+  scheduleMorningReminder,
+  scheduleEveningReminder,
+  cancelAllNotifications,
+} from "@/lib/notifications";
 import { RPGBox } from "@/components/RPGBox";
+import { RPGButton } from "@/components/RPGButton";
 import { Colors, FontSize, Spacing } from "@/constants/theme";
 
-interface Notification {
-  id: string;
-  title: string;
-  body: string;
-  type: string;
-  isRead: boolean;
-  createdAt: string;
-}
-
 export default function NotificationsScreen() {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [scheduled, setScheduled] = useState<Notifications.NotificationRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const data = await api.getNotifications();
-      setNotifications(data.notifications);
-    } catch {
-      // ignore
-    } finally {
-      setIsLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  const load = async () => {
+    const list = await Notifications.getAllScheduledNotificationsAsync();
+    setScheduled(list);
+    setIsLoading(false);
+  };
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, []);
 
-  const handleRead = async (id: string) => {
-    try {
-      await api.markNotificationRead(id);
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
-      );
-    } catch {
-      // ignore
-    }
+  const handleEnableAll = async () => {
+    await scheduleMorningReminder();
+    await scheduleEveningReminder();
+    await load();
+    Alert.alert("通知ON", "朝7時・夜8時のリマインダーを設定しました");
   };
 
-  const formatTime = (iso: string) => {
-    const d = new Date(iso);
-    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const handleDisableAll = async () => {
+    await cancelAllNotifications();
+    await load();
+    Alert.alert("通知OFF", "すべてのリマインダーを解除しました");
   };
 
   if (isLoading) {
@@ -69,41 +52,45 @@ export default function NotificationsScreen() {
   }
 
   return (
-    <ScrollView
-      style={styles.flex}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.gold} />
-      }
-    >
-      {notifications.length === 0 ? (
-        <RPGBox style={{ alignItems: "center", paddingVertical: 48 }}>
-          <Text style={{ fontSize: 40 }}>🔔</Text>
-          <Text style={styles.dim}>通知はありません</Text>
-        </RPGBox>
-      ) : (
-        notifications.map((n) => (
-          <TouchableOpacity key={n.id} onPress={() => handleRead(n.id)}>
-            <RPGBox
-              style={{
-                padding: 14,
-                opacity: n.isRead ? 0.6 : 1,
-              }}
-            >
-              <View style={styles.notifRow}>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={styles.notifTitle}>{n.title}</Text>
-                  <Text style={styles.dim}>{n.body}</Text>
-                </View>
-                <View style={{ alignItems: "flex-end", gap: 4 }}>
-                  <Text style={styles.time}>{formatTime(n.createdAt)}</Text>
-                  {!n.isRead && <View style={styles.unreadDot} />}
-                </View>
-              </View>
-            </RPGBox>
-          </TouchableOpacity>
-        ))
-      )}
+    <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
+      <RPGBox style={{ alignItems: "center", gap: 8 }}>
+        <Text style={{ fontSize: 40 }}>🔔</Text>
+        <Text style={styles.title}>通知リマインダー</Text>
+        <Text style={styles.dim}>
+          毎朝7時と夜8時にタスクリマインダーを送ります
+        </Text>
+      </RPGBox>
+
+      <RPGBox style={{ gap: 8 }}>
+        <Text style={styles.sectionTitle}>現在のスケジュール</Text>
+        {scheduled.length === 0 ? (
+          <Text style={styles.dim}>リマインダーは設定されていません</Text>
+        ) : (
+          scheduled.map((n) => (
+            <View key={n.identifier} style={styles.scheduleRow}>
+              <Text style={styles.scheduleId}>
+                {n.identifier === "morning-reminder" ? "🌅 朝のリマインダー" : "🌙 夜のリマインダー"}
+              </Text>
+              <Text style={styles.dim}>
+                {n.content.title}
+              </Text>
+            </View>
+          ))
+        )}
+      </RPGBox>
+
+      <RPGButton
+        title="リマインダーをONにする"
+        onPress={handleEnableAll}
+        icon="✅"
+      />
+
+      <RPGButton
+        title="リマインダーをOFFにする"
+        variant="secondary"
+        onPress={handleDisableAll}
+        icon="🔕"
+      />
     </ScrollView>
   );
 }
@@ -111,15 +98,10 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: Colors.bg },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  content: { padding: Spacing.lg, gap: 8, paddingBottom: 40 },
+  content: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 40 },
+  title: { fontSize: FontSize.lg, fontWeight: "700", color: Colors.gold },
   dim: { fontSize: FontSize.sm, color: Colors.dim },
-  notifRow: { flexDirection: "row", gap: 12 },
-  notifTitle: { fontSize: FontSize.base, fontWeight: "600", color: Colors.text },
-  time: { fontSize: FontSize.xs, color: Colors.dim },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Colors.gold,
-  },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: "600", color: Colors.text },
+  scheduleRow: { gap: 2, paddingVertical: 4 },
+  scheduleId: { fontSize: FontSize.base, fontWeight: "500", color: Colors.text },
 });

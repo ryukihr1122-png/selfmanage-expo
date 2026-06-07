@@ -1,10 +1,14 @@
 /**
- * ステータス画面 — レベル・EXP・WAKP詳細・ストリーク
+ * ステータス画面（ローカルファースト版）
  */
 import React, { useState, useEffect } from "react";
 import { View, Text, ScrollView, StyleSheet } from "react-native";
-import { api } from "@/lib/api";
-import type { MeResponse, OnboardingAnswers } from "@/lib/api";
+import {
+  getProfile,
+  getOnboarding,
+  type Profile,
+  type OnboardingAnswers,
+} from "@/db/repository";
 import { RPGBox } from "@/components/RPGBox";
 import { Colors, FontSize, Spacing, BorderRadius } from "@/constants/theme";
 
@@ -16,20 +20,20 @@ const WAKP = [
 ] as const;
 
 export default function StatsScreen() {
-  const [me, setMe] = useState<MeResponse | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [habits, setHabits] = useState<Partial<OnboardingAnswers> | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([api.getMe(), api.getOnboarding().catch(() => null)])
-      .then(([meRes, onboarding]) => {
-        setMe(meRes);
-        if (onboarding) setHabits(onboarding.answers);
+    Promise.all([getProfile(), getOnboarding().catch(() => null)])
+      .then(([p, onboarding]) => {
+        setProfile(p);
+        if (onboarding) setHabits(onboarding);
       })
       .finally(() => setIsLoading(false));
   }, []);
 
-  if (isLoading || !me) {
+  if (isLoading || !profile) {
     return (
       <View style={styles.center}>
         <Text style={styles.loadingText}>読み込み中...</Text>
@@ -37,36 +41,35 @@ export default function StatsScreen() {
     );
   }
 
-  const { stats } = me;
-  const xpInLevel = stats.totalXp % 100;
+  const xpInLevel = profile.totalXp % 100;
   const xpPct = Math.round((xpInLevel / 100) * 100);
 
   return (
     <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
       {/* メインステータス */}
       <RPGBox style={{ alignItems: "center", gap: 12 }}>
-        <Text style={styles.levelBig}>Lv.{stats.level}</Text>
+        <Text style={styles.levelBig}>Lv.{profile.level}</Text>
         <View style={styles.xpBarWide}>
           <View style={[styles.xpBarFill, { width: `${xpPct}%` }]} />
         </View>
         <Text style={styles.xpText}>
-          {xpInLevel} / 100 EXP（総計 {stats.totalXp} EXP）
+          {xpInLevel} / 100 EXP（総計 {profile.totalXp} EXP）
         </Text>
 
         <View style={styles.statsGrid}>
           <View style={styles.statCell}>
-            <Text style={styles.statIcon}>{stats.streakDays >= 3 ? "🔥" : "💧"}</Text>
-            <Text style={styles.statValue}>{stats.streakDays}</Text>
+            <Text style={styles.statIcon}>{profile.streakDays >= 3 ? "🔥" : "💧"}</Text>
+            <Text style={styles.statValue}>{profile.streakDays}</Text>
             <Text style={styles.statCaption}>日連続</Text>
           </View>
           <View style={styles.statCell}>
             <Text style={styles.statIcon}>💰</Text>
-            <Text style={styles.statValue}>{stats.points}</Text>
+            <Text style={styles.statValue}>{profile.points}</Text>
             <Text style={styles.statCaption}>Pt</Text>
           </View>
           <View style={styles.statCell}>
             <Text style={styles.statIcon}>⭐</Text>
-            <Text style={styles.statValue}>{stats.totalXp}</Text>
+            <Text style={styles.statValue}>{profile.totalXp}</Text>
             <Text style={styles.statCaption}>総EXP</Text>
           </View>
         </View>
@@ -77,7 +80,7 @@ export default function StatsScreen() {
       {WAKP.map((w) => {
         const wHabits =
           (habits?.[w.habitsKey as keyof OnboardingAnswers] as string[] | undefined) ?? [];
-        const companionXp = Math.floor(stats.totalXp / 4);
+        const companionXp = Math.floor(profile.totalXp / 4);
         const level = Math.floor(companionXp / 25) + 1;
         const pct = Math.round(((companionXp % 25) / 25) * 100);
 

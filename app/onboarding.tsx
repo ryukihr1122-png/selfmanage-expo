@@ -1,5 +1,5 @@
 /**
- * オンボーディング — WAKPカテゴリの習慣選択
+ * オンボーディング（ローカルファースト版）
  */
 import React, { useState, useEffect } from "react";
 import {
@@ -11,8 +11,11 @@ import {
   Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { api } from "@/lib/api";
-import type { OnboardingAnswers } from "@/lib/api";
+import {
+  getOnboarding,
+  saveOnboarding,
+  type OnboardingAnswers,
+} from "@/db/repository";
 import { RPGBox } from "@/components/RPGBox";
 import { RPGButton } from "@/components/RPGButton";
 import { Colors, FontSize, Spacing, BorderRadius } from "@/constants/theme";
@@ -100,10 +103,8 @@ export default function OnboardingScreen() {
   const [initialLoading, setInitialLoading] = useState(true);
 
   useEffect(() => {
-    api
-      .getOnboarding()
-      .then((data) => {
-        const a = data.answers;
+    getOnboarding()
+      .then((a) => {
         setSelected({
           wellnessHabits: a.wellnessHabits ?? [],
           actionHabits: a.actionHabits ?? [],
@@ -127,6 +128,8 @@ export default function OnboardingScreen() {
     });
   };
 
+  const totalSelected = Object.values(selected).flat().length;
+
   const handleSave = async () => {
     if (totalSelected === 0) {
       Alert.alert("選択してください", "最低1つの習慣を選んでください");
@@ -134,7 +137,7 @@ export default function OnboardingScreen() {
     }
     setLoading(true);
     try {
-      await api.saveOnboarding(selected as OnboardingAnswers);
+      await saveOnboarding(selected as OnboardingAnswers);
       Alert.alert(
         "🌱 冒険が始まります！",
         `${totalSelected}個の習慣がデイリータスクとして登録されました。毎日取り組んでレベルアップしましょう！`,
@@ -154,8 +157,6 @@ export default function OnboardingScreen() {
       </View>
     );
   }
-
-  const totalSelected = Object.values(selected).flat().length;
 
   return (
     <ScrollView style={styles.flex} contentContainerStyle={styles.content}>

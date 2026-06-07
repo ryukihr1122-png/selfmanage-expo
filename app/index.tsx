@@ -1,24 +1,38 @@
 /**
- * エントリポイント — 認証状態に応じてリダイレクト
+ * エントリポイント — オンボーディング状態に応じてリダイレクト
+ *
+ * ローカルファースト: 認証不要。
+ * 初回起動 → オンボーディング、以降 → ホーム。
  */
 import { useEffect } from "react";
 import { useRouter } from "expo-router";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
-import { useAuth } from "@/contexts/AuthContext";
+import { useApp } from "@/contexts/AppContext";
+import { getOnboarding } from "@/db/repository";
 import { Colors, FontSize } from "@/constants/theme";
 
 export default function Index() {
-  const { user, isLoading } = useAuth();
+  const { isLoading } = useApp();
   const router = useRouter();
 
   useEffect(() => {
     if (isLoading) return;
-    if (user) {
-      router.replace("/(tabs)");
-    } else {
-      router.replace("/(auth)/login");
-    }
-  }, [user, isLoading, router]);
+
+    (async () => {
+      const onboarding = await getOnboarding();
+      const hasHabits =
+        (onboarding?.wellnessHabits?.length ?? 0) > 0 ||
+        (onboarding?.actionHabits?.length ?? 0) > 0 ||
+        (onboarding?.knowledgeHabits?.length ?? 0) > 0 ||
+        (onboarding?.purposeHabits?.length ?? 0) > 0;
+
+      if (hasHabits) {
+        router.replace("/(tabs)");
+      } else {
+        router.replace("/onboarding");
+      }
+    })();
+  }, [isLoading, router]);
 
   return (
     <View style={styles.container}>

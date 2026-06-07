@@ -1,10 +1,5 @@
 /**
- * タスク管理画面
- * - 今日のタスク一覧（完了・取消）
- * - 新規タスク作成（ユーザー自作）
- * - レコメンドタスク追加
- * - 広告視聴でボーナスタスク取得
- * - タスク履歴
+ * タスク管理画面（ローカルファースト版）
  */
 import React, { useState, useEffect, useCallback } from "react";
 import {
@@ -17,8 +12,21 @@ import {
   StyleSheet,
   Alert,
 } from "react-native";
-import { api, todayJST } from "@/lib/api";
-import type { DailyTask, RecurringTask, HistoryDay } from "@/lib/api";
+import {
+  getTodayTasks,
+  getRecurringTasks,
+  getTaskHistory,
+  createRecurringTask,
+  createTask,
+  completeTask,
+  undoTask,
+  deleteRecurringTask,
+  claimAdRewardTask,
+  getAdRewardRemaining,
+  type DailyTask,
+  type RecurringTask,
+  type HistoryDay,
+} from "@/db/repository";
 import { showRewardedAd } from "@/lib/admob";
 import { RPGBox } from "@/components/RPGBox";
 import { RPGButton } from "@/components/RPGButton";
@@ -71,7 +79,7 @@ function CreateTaskModal({
     setError(null);
     try {
       if (isRecurring) {
-        await api.createRecurringTask({
+        await createRecurringTask({
           title: title.trim(),
           description: description.trim() || undefined,
           category,
@@ -79,7 +87,7 @@ function CreateTaskModal({
           schedule,
         });
       } else {
-        await api.createTask({
+        await createTask({
           title: title.trim(),
           description: description.trim() || undefined,
           category,
@@ -250,7 +258,7 @@ function CreateTaskModal({
 
 export default function QuestScreen() {
   const [tasks, setTasks] = useState<DailyTask[]>([]);
-  const [recurringTasks, setRecurringTasks] = useState<RecurringTask[]>([]);
+  const [recurringTasks, setRecurringTasksList] = useState<RecurringTask[]>([]);
   const [history, setHistory] = useState<HistoryDay[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -261,14 +269,16 @@ export default function QuestScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [me, recurring, hist] = await Promise.all([
-        api.getMe(),
-        api.getRecurringTasks().catch(() => ({ tasks: [] as RecurringTask[] })),
-        api.getTaskHistory(14).catch(() => ({ history: [] as HistoryDay[] })),
+      const [t, recurring, hist, remaining] = await Promise.all([
+        getTodayTasks(),
+        getRecurringTasks().catch(() => [] as RecurringTask[]),
+        getTaskHistory(14).catch(() => [] as HistoryDay[]),
+        getAdRewardRemaining().catch(() => 3),
       ]);
-      setTasks(me.todayTasks);
-      setRecurringTasks(recurring.tasks);
-      setHistory(hist.history);
+      setTasks(t);
+      setRecurringTasksList(recurring);
+      setHistory(hist);
+      setAdRemaining(remaining);
     } catch {
       // ignore
     } finally {
@@ -286,11 +296,11 @@ export default function QuestScreen() {
       if (pendingTaskId) return;
       setPendingTaskId(taskId);
       try {
-        await api.completeTask(taskId, todayJST());
+        await completeTask(taskId);
         setTasks((prev) =>
           prev.map((t) =>
             t.id === taskId
-              ? { ...t, isCompleted: true, latestEventAt: new Date().toISOString() }
+              ? { ...t, isCompleted: true, completedAt: new Date().toISOString() }
               : t,
           ),
         );
@@ -308,10 +318,10 @@ export default function QuestScreen() {
       if (pendingTaskId) return;
       setPendingTaskId(taskId);
       try {
-        await api.undoTask(taskId);
+        await undoTask(taskId);
         setTasks((prev) =>
           prev.map((t) =>
-            t.id === taskId ? { ...t, isCompleted: false, latestEventAt: null } : t,
+            t.id === taskId ? { ...t, isCompleted: false, completedAt: null } : t,
           ),
         );
       } catch (err) {
@@ -330,11 +340,8 @@ export default function QuestScreen() {
     }
     try {
       const watched = await showRewardedAd();
-      if (!watched) {
-        // ユーザーが途中で閉じた or ロード失敗
-        return;
-      }
-      const res = await api.claimAdRewardTask("ad-reward-verified");
+      if (!watched) return;
+      const res = await claimAdRewardTask();
       setTasks((prev) => [...prev, res.task]);
       setAdRemaining(res.remainingToday);
       Alert.alert("獲得!", `「${res.task.title}」が追加されました！`);
@@ -351,8 +358,8 @@ export default function QuestScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await api.deleteRecurringTask(id);
-            setRecurringTasks((prev) => prev.filter((t) => t.id !== id));
+            await deleteRecurringTask(id);
+            setRecurringTasksList((prev) => prev.filter((t) => t.id !== id));
           } catch (err) {
             Alert.alert("エラー", err instanceof Error ? err.message : "削除に失敗");
           }

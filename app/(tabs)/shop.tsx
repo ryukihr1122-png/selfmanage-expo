@@ -1,5 +1,5 @@
 /**
- * ショップ画面 — ポイントでアイテム購入
+ * ショップ画面（ローカルファースト版）
  */
 import React, { useState, useEffect, useCallback } from "react";
 import {
@@ -10,11 +10,15 @@ import {
   Alert,
   StyleSheet,
 } from "react-native";
-import { api } from "@/lib/api";
-import type { ShopItem } from "@/lib/api";
+import {
+  getShopItems,
+  getProfile,
+  purchaseItem,
+  type ShopItem,
+} from "@/db/repository";
 import { RPGBox } from "@/components/RPGBox";
 import { RPGButton } from "@/components/RPGButton";
-import { Colors, FontSize, Spacing, BorderRadius } from "@/constants/theme";
+import { Colors, FontSize, Spacing } from "@/constants/theme";
 
 function effectLabel(effect: Record<string, unknown>): string {
   const type = effect.type as string;
@@ -47,9 +51,9 @@ export default function ShopScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [shop, me] = await Promise.all([api.getShopItems(), api.getMe()]);
-      setItems(shop.items);
-      setPoints(me.stats.points);
+      const [shop, profile] = await Promise.all([getShopItems(), getProfile()]);
+      setItems(shop);
+      setPoints(profile.points);
     } catch {
       // ignore
     } finally {
@@ -74,7 +78,7 @@ export default function ShopScreen() {
         onPress: async () => {
           setBuying(item.id);
           try {
-            const res = await api.purchaseItem(item.id);
+            const res = await purchaseItem(item.id);
             setPoints(res.pointsRemaining);
             setItems((prev) =>
               prev.map((i) => (i.id === item.id ? { ...i, owned: true } : i)),

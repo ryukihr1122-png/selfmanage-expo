@@ -1,14 +1,13 @@
 /**
- * プッシュ通知ヘルパー
+ * プッシュ通知ヘルパー（ローカルファースト版）
  *
- * - Expo Push Token の取得・サーバー登録
  * - ローカル通知スケジュール（毎朝・夜リマインダー）
+ * - サーバー登録は不要（ローカルDB）
  */
 
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
-import { api } from "./api";
 
 // フォアグラウンド受信時の挙動
 Notifications.setNotificationHandler({
@@ -22,7 +21,7 @@ Notifications.setNotificationHandler({
 });
 
 /**
- * Expo Push Token を取得し、サーバーに登録
+ * 通知パーミッションを要求
  */
 export async function registerForPushNotifications(): Promise<string | null> {
   if (!Device.isDevice) {
@@ -43,29 +42,18 @@ export async function registerForPushNotifications(): Promise<string | null> {
     return null;
   }
 
-  const tokenData = await Notifications.getExpoPushTokenAsync();
-  const token = tokenData.data;
-
-  // サーバーにトークンを送信
-  try {
-    await api.registerPushToken(token);
-  } catch (err) {
-    console.error("[notifications] Failed to register token:", err);
-  }
-
   // iOS バッジリセット
   if (Platform.OS === "ios") {
     await Notifications.setBadgeCountAsync(0);
   }
 
-  return token;
+  return "local-only";
 }
 
 /**
  * 毎朝のリマインダーをスケジュール（ローカル通知）
  */
 export async function scheduleMorningReminder(): Promise<void> {
-  // 既存をキャンセル
   await cancelScheduledNotifications("morning-reminder");
 
   await Notifications.scheduleNotificationAsync({
@@ -84,7 +72,7 @@ export async function scheduleMorningReminder(): Promise<void> {
 }
 
 /**
- * 夜のリマインダーをスケジュール（未完了タスクがある場合）
+ * 夜のリマインダーをスケジュール
  */
 export async function scheduleEveningReminder(): Promise<void> {
   await cancelScheduledNotifications("evening-reminder");

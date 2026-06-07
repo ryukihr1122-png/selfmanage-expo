@@ -1,10 +1,12 @@
 /**
- * タブナビゲーション
+ * タブナビゲーション（ローカルファースト版）
+ *
+ * フレンドタブ削除。認証不要。
  */
-import React, { useEffect } from "react";
+import React from "react";
 import { Text, StyleSheet } from "react-native";
-import { Tabs, useRouter } from "expo-router";
-import { useAuth } from "@/contexts/AuthContext";
+import { Tabs } from "expo-router";
+import { useApp } from "@/contexts/AppContext";
 import { LoginBonusModal } from "@/components/LoginBonusModal";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { Colors, FontSize } from "@/constants/theme";
@@ -16,16 +18,9 @@ function TabIcon({ emoji, focused }: { emoji: string; focused: boolean }) {
 }
 
 export default function TabsLayout() {
-  const { user, isLoading, loginBonus, dismissLoginBonus } = useAuth();
-  const router = useRouter();
+  const { isLoading, loginBonus, dismissLoginBonus } = useApp();
 
-  useEffect(() => {
-    if (!isLoading && !user) {
-      router.replace("/(auth)/login");
-    }
-  }, [user, isLoading, router]);
-
-  if (isLoading || !user) return null;
+  if (isLoading) return null;
 
   return (
     <>
@@ -63,15 +58,6 @@ export default function TabsLayout() {
             title: "タスク",
             tabBarIcon: ({ focused }) => (
               <TabIcon emoji="✅" focused={focused} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="friends"
-          options={{
-            title: "仲間",
-            tabBarIcon: ({ focused }) => (
-              <TabIcon emoji="👥" focused={focused} />
             ),
           }}
         />

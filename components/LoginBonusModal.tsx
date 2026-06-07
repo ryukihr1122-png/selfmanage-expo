@@ -5,7 +5,7 @@ import React from "react";
 import { View, Text, Modal, StyleSheet } from "react-native";
 import { Colors, FontSize, BorderRadius } from "@/constants/theme";
 import { RPGButton } from "./RPGButton";
-import type { LoginBonusResult } from "@/lib/api";
+import type { LoginBonusResult } from "@/db/repository";
 
 interface Props {
   bonus: LoginBonusResult;

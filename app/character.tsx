@@ -1,14 +1,19 @@
 /**
- * キャラクター（プロフィール）画面 — 装備スロット・称号
+ * キャラクター（プロフィール）画面（ローカルファースト版）
  */
 import React, { useState, useEffect } from "react";
 import { View, Text, ScrollView, Alert, StyleSheet } from "react-native";
-import { api } from "@/lib/api";
-import { useAuth } from "@/contexts/AuthContext";
-import type { Stats, UserItem } from "@/lib/api";
+import {
+  getProfile,
+  getMyItems,
+  equipItem,
+  unequipItem,
+  type Profile,
+  type UserItem,
+} from "@/db/repository";
 import { RPGBox } from "@/components/RPGBox";
 import { RPGButton } from "@/components/RPGButton";
-import { Colors, FontSize, Spacing, BorderRadius } from "@/constants/theme";
+import { Colors, FontSize, Spacing } from "@/constants/theme";
 
 const SLOTS = [
   { key: "weapon", label: "道具", icon: "🛠️" },
@@ -17,23 +22,22 @@ const SLOTS = [
 ] as const;
 
 export default function CharacterScreen() {
-  const { user } = useAuth();
-  const [stats, setStats] = useState<Stats | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [items, setItems] = useState<UserItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([api.getMe(), api.getMyItems().catch(() => ({ items: [] as UserItem[] }))])
-      .then(([me, inv]) => {
-        setStats(me.stats);
-        setItems(inv.items);
+    Promise.all([getProfile(), getMyItems().catch(() => [] as UserItem[])])
+      .then(([p, inv]) => {
+        setProfile(p);
+        setItems(inv);
       })
       .finally(() => setIsLoading(false));
   }, []);
 
   const handleEquip = async (userItemId: string) => {
     try {
-      await api.equipItem(userItemId);
+      await equipItem(userItemId);
       setItems((prev) =>
         prev.map((i) => ({ ...i, isEquipped: i.userItemId === userItemId ? true : i.isEquipped })),
       );
@@ -44,7 +48,7 @@ export default function CharacterScreen() {
 
   const handleUnequip = async (userItemId: string) => {
     try {
-      await api.unequipItem(userItemId);
+      await unequipItem(userItemId);
       setItems((prev) =>
         prev.map((i) => ({ ...i, isEquipped: i.userItemId === userItemId ? false : i.isEquipped })),
       );
@@ -53,7 +57,7 @@ export default function CharacterScreen() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || !profile) {
     return (
       <View style={styles.center}>
         <Text style={styles.loadingText}>読み込み中...</Text>
@@ -69,10 +73,10 @@ export default function CharacterScreen() {
       {/* プロフィールヘッダ */}
       <RPGBox style={{ alignItems: "center", gap: 8 }}>
         <Text style={{ fontSize: 48 }}>👤</Text>
-        <Text style={styles.name}>{user?.displayName}</Text>
-        <Text style={styles.levelText}>Lv.{stats?.level ?? 1}</Text>
+        <Text style={styles.name}>{profile.displayName}</Text>
+        <Text style={styles.levelText}>Lv.{profile.level}</Text>
         <Text style={styles.dim}>
-          総EXP {stats?.totalXp ?? 0} · {stats?.streakDays ?? 0}日連続 · {stats?.points ?? 0} Pt
+          総EXP {profile.totalXp} · {profile.streakDays}日連続 · {profile.points} Pt
         </Text>
       </RPGBox>
 

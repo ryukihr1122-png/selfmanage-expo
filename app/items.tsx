@@ -1,10 +1,9 @@
 /**
- * アイテム一覧画面（インベントリ）
+ * アイテム一覧画面（ローカルファースト版）
  */
 import React, { useState, useEffect } from "react";
 import { View, Text, ScrollView, StyleSheet } from "react-native";
-import { api } from "@/lib/api";
-import type { UserItem } from "@/lib/api";
+import { getMyItems, type UserItem } from "@/db/repository";
 import { RPGBox } from "@/components/RPGBox";
 import { Colors, FontSize, Spacing } from "@/constants/theme";
 
@@ -13,9 +12,8 @@ export default function ItemsScreen() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    api
-      .getMyItems()
-      .then((data) => setItems(data.items))
+    getMyItems()
+      .then((data) => setItems(data))
       .catch(() => {})
       .finally(() => setIsLoading(false));
   }, []);

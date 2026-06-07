@@ -51,7 +51,9 @@
       ],
       "expo-status-bar",
       "expo-splash-screen",
-      "expo-asset"
+      "expo-asset",
+      "expo-sqlite",
+      "expo-sharing"
     ],
     "extra": {
       "eas": {
