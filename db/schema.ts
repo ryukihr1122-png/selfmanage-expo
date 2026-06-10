@@ -7,7 +7,7 @@
 
 import type { SQLiteDatabase } from "expo-sqlite";
 
-export const CURRENT_DB_VERSION = 1;
+export const CURRENT_DB_VERSION = 2;
 
 /**
  * マイグレーション実行
@@ -24,7 +24,9 @@ export async function migrateIfNeeded(db: SQLiteDatabase): Promise<void> {
     if (currentVersion < 1) {
       await applyV1(txn);
     }
-    // if (currentVersion < 2) { await applyV2(txn); }
+    if (currentVersion < 2) {
+      await applyV2(txn);
+    }
   });
 
   await db.execAsync(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
@@ -176,6 +178,185 @@ async function applyV1(db: SQLiteDatabase): Promise<void> {
 
   // 初期アイテムマスターデータを挿入
   await seedItems(db);
+}
+
+// ─── V2: キャラクター育成システム ─────────────────────────────
+
+async function applyV2(db: SQLiteDatabase): Promise<void> {
+  await db.execAsync(`
+    -- ─── ジャンルマスター ───
+    CREATE TABLE IF NOT EXISTS genres (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      description TEXT,
+      icon_emoji  TEXT NOT NULL,
+      theme_color TEXT NOT NULL,
+      sort_order  INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- ─── キャラクターマスター ───
+    CREATE TABLE IF NOT EXISTS characters (
+      id          TEXT PRIMARY KEY,
+      genre_id    TEXT NOT NULL REFERENCES genres(id),
+      name        TEXT NOT NULL,
+      description TEXT,
+      is_default  INTEGER NOT NULL DEFAULT 1,
+      sort_order  INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- ─── キャラ成長段階マスター ───
+    CREATE TABLE IF NOT EXISTS character_stages (
+      stage       INTEGER PRIMARY KEY,
+      min_level   INTEGER NOT NULL,
+      stage_name  TEXT NOT NULL
+    );
+
+    -- ─── ユーザー所持キャラクター ───
+    CREATE TABLE IF NOT EXISTS user_characters (
+      id            TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      character_id  TEXT NOT NULL REFERENCES characters(id),
+      genre_id      TEXT NOT NULL REFERENCES genres(id),
+      nickname      TEXT,
+      current_xp    INTEGER NOT NULL DEFAULT 0,
+      level         INTEGER NOT NULL DEFAULT 0,
+      stage         INTEGER NOT NULL DEFAULT 0,
+      skin_id       TEXT,
+      is_active     INTEGER NOT NULL DEFAULT 1,
+      unlocked_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      UNIQUE(character_id)
+    );
+
+    -- ─── プレイヤーレベル解放条件 ───
+    CREATE TABLE IF NOT EXISTS player_unlocks (
+      player_level        INTEGER PRIMARY KEY,
+      max_characters      INTEGER NOT NULL,
+      max_tasks_per_char  INTEGER NOT NULL,
+      unlock_label        TEXT
+    );
+
+    -- ─── ジャンル別プリセットタスク ───
+    CREATE TABLE IF NOT EXISTS genre_tasks (
+      id          TEXT PRIMARY KEY,
+      genre_id    TEXT NOT NULL REFERENCES genres(id),
+      title       TEXT NOT NULL,
+      description TEXT,
+      base_xp     INTEGER NOT NULL DEFAULT 10,
+      sort_order  INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- ─── タスク難易度レベル定義 ───
+    CREATE TABLE IF NOT EXISTS task_levels (
+      id                    TEXT PRIMARY KEY,
+      genre_task_id         TEXT NOT NULL REFERENCES genre_tasks(id),
+      level                 INTEGER NOT NULL DEFAULT 1,
+      label                 TEXT NOT NULL,
+      description           TEXT,
+      xp_multiplier         REAL NOT NULL DEFAULT 1.0,
+      required_completions  INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(genre_task_id, level)
+    );
+
+    -- ─── ユーザーが選んだタスク（キャラに紐づく日課） ───
+    CREATE TABLE IF NOT EXISTS user_tasks (
+      id                TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      user_character_id TEXT NOT NULL REFERENCES user_characters(id),
+      genre_task_id     TEXT NOT NULL REFERENCES genre_tasks(id),
+      current_level     INTEGER NOT NULL DEFAULT 1,
+      total_completions INTEGER NOT NULL DEFAULT 0,
+      is_active         INTEGER NOT NULL DEFAULT 1,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      UNIQUE(user_character_id, genre_task_id)
+    );
+
+    -- ─── デイリータスク v2（毎日生成） ───
+    CREATE TABLE IF NOT EXISTS daily_tasks_v2 (
+      id                TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      user_task_id      TEXT NOT NULL REFERENCES user_tasks(id),
+      user_character_id TEXT NOT NULL REFERENCES user_characters(id),
+      task_date         TEXT NOT NULL,
+      title             TEXT NOT NULL,
+      level_label       TEXT NOT NULL,
+      reward_xp         INTEGER NOT NULL DEFAULT 10,
+      is_completed      INTEGER NOT NULL DEFAULT 0,
+      completed_at      TEXT,
+      source            TEXT NOT NULL DEFAULT 'routine',
+      created_at        TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      UNIQUE(user_task_id, task_date)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_daily_tasks_v2_date ON daily_tasks_v2(task_date);
+    CREATE INDEX IF NOT EXISTS idx_daily_tasks_v2_char ON daily_tasks_v2(user_character_id);
+  `);
+
+  // シードデータ投入
+  await seedV2(db);
+}
+
+async function seedV2(db: SQLiteDatabase): Promise<void> {
+  const {
+    GENRES,
+    CHARACTERS,
+    CHARACTER_STAGES,
+    PLAYER_UNLOCKS,
+    GENRE_TASKS,
+    TASK_LEVEL_DEFS,
+  } = await import("./seed-data");
+
+  // ジャンル
+  for (const g of GENRES) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO genres (id, name, description, icon_emoji, theme_color, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      g.id, g.name, g.description, g.icon_emoji, g.theme_color, g.sort_order,
+    );
+  }
+
+  // キャラクター
+  for (const c of CHARACTERS) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO characters (id, genre_id, name, description, is_default, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      c.id, c.genre_id, c.name, c.description, c.is_default, c.sort_order,
+    );
+  }
+
+  // 成長段階
+  for (const s of CHARACTER_STAGES) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO character_stages (stage, min_level, stage_name)
+       VALUES (?, ?, ?)`,
+      s.stage, s.min_level, s.stage_name,
+    );
+  }
+
+  // プレイヤー解放条件
+  for (const u of PLAYER_UNLOCKS) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO player_unlocks (player_level, max_characters, max_tasks_per_char, unlock_label)
+       VALUES (?, ?, ?, ?)`,
+      u.player_level, u.max_characters, u.max_tasks_per_char, u.unlock_label,
+    );
+  }
+
+  // ジャンル別タスク + レベル定義
+  for (const gt of GENRE_TASKS) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO genre_tasks (id, genre_id, title, description, base_xp, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      gt.id, gt.genre_id, gt.title, gt.description, gt.base_xp, gt.sort_order,
+    );
+
+    for (const lv of gt.levels) {
+      const lvDef = TASK_LEVEL_DEFS.find((d) => d.level === lv.level);
+      const tlId = `${gt.id}_lv${lv.level}`;
+      await db.runAsync(
+        `INSERT OR IGNORE INTO task_levels (id, genre_task_id, level, label, description, xp_multiplier, required_completions)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        tlId, gt.id, lv.level, lv.label, lv.description,
+        lvDef?.xp_multiplier ?? 1.0, lvDef?.required_completions ?? 0,
+      );
+    }
+  }
 }
 
 // ─── アイテムマスターシードデータ ──────────────────────────────

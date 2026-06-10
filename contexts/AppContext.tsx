@@ -26,6 +26,7 @@ import {
   scheduleMorningReminder,
   scheduleEveningReminder,
 } from "@/lib/notifications";
+import { initializeAdMob } from "@/lib/admob";
 
 interface AppState {
   profile: Profile | null;
@@ -58,6 +59,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (!bonus.alreadyClaimed) {
           setLoginBonus(bonus);
         }
+
+        // AdMob初期化
+        initializeAdMob().catch(() => {});
 
         // プッシュ通知
         registerForPushNotifications().catch(() => {});

@@ -53,13 +53,21 @@
       "expo-splash-screen",
       "expo-asset",
       "expo-sqlite",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "react-native-google-mobile-ads",
+        {
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511",
+          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "userTrackingUsageDescription": "広告の最適化とパーソナライズのために使用します"
+        }
+      ]
     ],
     "extra": {
       "eas": {
         "projectId": ""
       },
-      "apiUrl": "https://selfmanage-app-production.up.railway.app"
+      "adMobTestMode": true
     },
     "updates": {
       "url": ""

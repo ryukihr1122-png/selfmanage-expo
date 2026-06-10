@@ -106,12 +106,12 @@ export async function getDB(): Promise<SQLite.SQLiteDatabase> {
 
 // ─── ヘルパー ─────────────────────────────────────────────────────
 
-function todayLocal(): string {
+export function todayLocal(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function generateId(): string {
+export function generateId(): string {
   const bytes = new Uint8Array(16);
   for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
