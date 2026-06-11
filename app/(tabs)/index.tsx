@@ -270,9 +270,7 @@ export default function DashboardScreen() {
             {unlockStatus && chars.length < unlockStatus.maxCharacters && (
               <TouchableOpacity
                 style={[styles.charCard, styles.charCardAdd]}
-                onPress={() => {
-                  // TODO: キャラ追加画面
-                }}
+                onPress={() => router.push("/(tabs)/stats")}
                 activeOpacity={0.7}
               >
                 <Text style={styles.addCharIcon}>+</Text>
