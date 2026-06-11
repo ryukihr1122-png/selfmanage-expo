@@ -21,6 +21,7 @@ import {
   type Profile,
   type LoginBonusResult,
 } from "@/db/repository";
+import { expandTodayTasksV2, getUserCharacters } from "@/db/character-repository";
 import {
   registerForPushNotifications,
   scheduleMorningReminder,
@@ -47,8 +48,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        // 今日のタスクを展開
+        // 今日のタスクを展開（v1 + v2両方）
         await expandTodayTasks();
+        const chars = await getUserCharacters();
+        if (chars.length > 0) {
+          await expandTodayTasksV2();
+        }
 
         // プロフィール読み込み
         const p = await getProfile();

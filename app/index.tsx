@@ -2,13 +2,13 @@
  * エントリポイント — オンボーディング状態に応じてリダイレクト
  *
  * ローカルファースト: 認証不要。
- * 初回起動 → オンボーディング、以降 → ホーム。
+ * キャラ未所持 → オンボーディング、所持済み → ホーム。
  */
 import { useEffect } from "react";
 import { useRouter } from "expo-router";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
 import { useApp } from "@/contexts/AppContext";
-import { getOnboarding } from "@/db/repository";
+import { getUserCharacters } from "@/db/character-repository";
 import { Colors, FontSize } from "@/constants/theme";
 
 export default function Index() {
@@ -19,14 +19,8 @@ export default function Index() {
     if (isLoading) return;
 
     (async () => {
-      const onboarding = await getOnboarding();
-      const hasHabits =
-        (onboarding?.wellnessHabits?.length ?? 0) > 0 ||
-        (onboarding?.actionHabits?.length ?? 0) > 0 ||
-        (onboarding?.knowledgeHabits?.length ?? 0) > 0 ||
-        (onboarding?.purposeHabits?.length ?? 0) > 0;
-
-      if (hasHabits) {
+      const chars = await getUserCharacters();
+      if (chars.length > 0) {
         router.replace("/(tabs)");
       } else {
         router.replace("/onboarding");

@@ -1,5 +1,10 @@
 /**
- * ダッシュボード（ローカルファースト版）
+ * ダッシュボード（v2 キャラクター育成版）
+ *
+ * - プレイヤーステータス（Lv, XP, ストリーク, Pt）
+ * - キャラカード一覧（各キャラの進捗）
+ * - 今日のエネルギーバー（残タスク数）
+ * - 今日のタスク（キャラ別グループ）
  */
 import React, { useState, useEffect, useCallback } from "react";
 import {
@@ -9,44 +14,45 @@ import {
   TouchableOpacity,
   RefreshControl,
   StyleSheet,
+  Animated,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import {
   getProfile,
-  getTodayTasks,
-  getOnboarding,
-  getMyItems,
-  completeTask,
-  undoTask,
   type Profile,
-  type DailyTask,
-  type OnboardingAnswers,
-  type UserItem,
 } from "@/db/repository";
+import {
+  getUserCharacters,
+  getTodayTasksV2,
+  completeTaskV2,
+  undoTaskV2,
+  getPlayerUnlockStatus,
+  type UserCharacter,
+  type DailyTaskV2,
+  type PlayerUnlockStatus,
+} from "@/db/character-repository";
 import { useApp } from "@/contexts/AppContext";
 import { RPGBox } from "@/components/RPGBox";
 import { XPPopup } from "@/components/XPPopup";
 import { haptic } from "@/lib/haptics";
 import { Colors, FontSize, Spacing, BorderRadius } from "@/constants/theme";
 
-// ─── WAKPカテゴリ定義 ───────────────────────────────────────────
-
-const COMPANIONS = [
-  { key: "W", habitsKey: "wellnessHabits", icon: "💧", color: "#4caf50", label: "ウェルネス" },
-  { key: "A", habitsKey: "actionHabits", icon: "🔥", color: "#e53935", label: "アクション" },
-  { key: "K", habitsKey: "knowledgeHabits", icon: "📚", color: "#1e88e5", label: "ナレッジ" },
-  { key: "P", habitsKey: "purposeHabits", icon: "🌟", color: "#f9a825", label: "パーパス" },
-] as const;
-
-// ─── メイン ────────────────────────────────────────────────────
+// ステージ→絵文字
+const STAGE_EMOJI: Record<number, string> = {
+  0: "🥚",
+  1: "🐣",
+  2: "🐥",
+  3: "🐉",
+  4: "✨",
+};
 
 export default function DashboardScreen() {
   const router = useRouter();
   const { refreshProfile } = useApp();
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [tasks, setTasks] = useState<DailyTask[]>([]);
-  const [habits, setHabits] = useState<Partial<OnboardingAnswers> | null>(null);
-  const [equippedItems, setEquippedItems] = useState<UserItem[]>([]);
+  const [chars, setChars] = useState<UserCharacter[]>([]);
+  const [tasks, setTasks] = useState<DailyTaskV2[]>([]);
+  const [unlockStatus, setUnlockStatus] = useState<PlayerUnlockStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
@@ -56,16 +62,16 @@ export default function DashboardScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [p, t, o, items] = await Promise.all([
+      const [p, c, t, u] = await Promise.all([
         getProfile(),
-        getTodayTasks(),
-        getOnboarding().catch(() => null),
-        getMyItems().catch(() => []),
+        getUserCharacters(),
+        getTodayTasksV2(),
+        getPlayerUnlockStatus(),
       ]);
       setProfile(p);
+      setChars(c);
       setTasks(t);
-      if (o) setHabits(o);
-      setEquippedItems(items.filter((i) => i.isEquipped));
+      setUnlockStatus(u);
     } catch {
       // ignore
     } finally {
@@ -76,30 +82,39 @@ export default function DashboardScreen() {
 
   useEffect(() => { load(); }, [load]);
 
+  // タブに戻った時にリロード
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
   const handleComplete = useCallback(async (taskId: string) => {
-    if (pendingTaskId || !profile) return;
+    if (pendingTaskId) return;
     setPendingTaskId(taskId);
     try {
-      const oldLevel = profile.level;
-      const res = await completeTask(taskId);
-      const newTotalXp = profile.totalXp + res.xpDelta;
-      const newLevel = Math.floor(newTotalXp / 100) + 1;
-      const didLevelUp = newLevel > oldLevel;
-
-      setProfile((prev) => prev ? {
-        ...prev,
-        totalXp: newTotalXp,
-        level: newLevel,
-        points: prev.points + res.ptDelta,
-        streakDays: res.streakDays,
-      } : prev);
+      const res = await completeTaskV2(taskId);
 
       setTasks((prev) => prev.map((t) =>
         t.id === taskId ? { ...t, isCompleted: true, completedAt: new Date().toISOString() } : t,
       ));
 
-      setXpPopup({ xp: res.xpDelta, levelUp: didLevelUp, newLevel });
+      // リロードして最新レベルを取る
+      const newProfile = await getProfile();
+      const didLevelUp = res.playerLevelUp;
+      setXpPopup({ xp: res.earnedXp, levelUp: didLevelUp, newLevel: newProfile.level });
+
       if (didLevelUp) haptic.levelUp(); else haptic.complete();
+
+      // リロード
+      const [p, c, u] = await Promise.all([
+        getProfile(),
+        getUserCharacters(),
+        getPlayerUnlockStatus(),
+      ]);
+      setProfile(p);
+      setChars(c);
+      setUnlockStatus(u);
       refreshProfile();
     } catch {
       // ignore
@@ -112,15 +127,14 @@ export default function DashboardScreen() {
     if (pendingTaskId) return;
     setPendingTaskId(taskId);
     try {
-      const res = await undoTask(taskId);
-      setProfile((prev) => prev ? {
-        ...prev,
-        totalXp: Math.max(0, prev.totalXp + res.xpDelta),
-        level: Math.max(1, Math.floor(Math.max(0, prev.totalXp + res.xpDelta) / 100) + 1),
-      } : prev);
+      await undoTaskV2(taskId);
       setTasks((prev) => prev.map((t) =>
         t.id === taskId ? { ...t, isCompleted: false, completedAt: null } : t,
       ));
+
+      const [p, c] = await Promise.all([getProfile(), getUserCharacters()]);
+      setProfile(p);
+      setChars(c);
       refreshProfile();
     } catch {
       // ignore
@@ -138,9 +152,15 @@ export default function DashboardScreen() {
   }
 
   const completedCount = tasks.filter((t) => t.isCompleted).length;
-  const normalTasks = tasks.filter((t) => !t.isBonus);
-  const bonusTasks = tasks.filter((t) => t.isBonus);
+  const totalCount = tasks.length;
+  const energyPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
   const xpPct = Math.round(((profile.totalXp % 100) / 100) * 100);
+
+  // キャラ別タスクグループ
+  const tasksByChar = chars.map((char) => ({
+    char,
+    tasks: tasks.filter((t) => t.userCharacterId === char.id),
+  }));
 
   return (
     <View style={styles.flex}>
@@ -151,106 +171,152 @@ export default function DashboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.gold} />
         }
       >
-        {/* WAKPカード */}
-        <View style={styles.companionGrid}>
-          {COMPANIONS.map((c) => {
-            const cHabits = (habits?.[c.habitsKey as keyof OnboardingAnswers] as string[] | undefined) ?? [];
-            const companionXp = Math.floor(profile.totalXp / 4);
-            const level = Math.floor(companionXp / 25) + 1;
-            return (
-              <TouchableOpacity
-                key={c.key}
-                style={[styles.companionCard, { borderColor: c.color, opacity: cHabits.length > 0 ? 1 : 0.5 }]}
-                onPress={() => router.push("/onboarding")}
-              >
-                <Text style={styles.companionIcon}>{c.icon}</Text>
-                <Text style={[styles.companionLabel, { color: c.color }]}>{c.key} — {c.label}</Text>
-                <Text style={[styles.companionLevel, { color: c.color }]}>Lv.{level}</Text>
+        {/* プレイヤーステータス */}
+        <RPGBox style={{ padding: 16 }}>
+          <View style={styles.playerRow}>
+            <View style={styles.playerInfo}>
+              <Text style={styles.playerName}>{profile.displayName}</Text>
+              <View style={styles.levelRow}>
+                <Text style={styles.levelLabel}>Lv.{profile.level}</Text>
                 <View style={styles.xpBarBg}>
-                  <View style={[styles.xpBarFill, { width: `${Math.round(((companionXp % 25) / 25) * 100)}%`, backgroundColor: c.color }]} />
+                  <View style={[styles.xpBarFill, { width: `${xpPct}%`, backgroundColor: Colors.gold }]} />
                 </View>
-                <Text style={[styles.companionHabits, { color: c.color }]}>
-                  {cHabits.length > 0 ? `${cHabits.length} 習慣` : "未設定"}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* 統計バー */}
-        <RPGBox style={{ padding: 12 }}>
-          <View style={styles.statsRow}>
-            <View style={styles.statItem}>
-              <Text style={styles.statLabel}>Lv.{profile.level}</Text>
-              <View style={styles.xpBarBgWide}>
-                <View style={[styles.xpBarFill, { width: `${xpPct}%`, backgroundColor: Colors.gold }]} />
+                <Text style={styles.xpText}>{profile.totalXp % 100}/100</Text>
               </View>
-              <Text style={styles.statDim}>{profile.totalXp % 100}/100</Text>
             </View>
-            <View style={styles.statChip}>
-              <Text>{profile.streakDays >= 3 ? "🔥" : "💧"}</Text>
-              <Text style={profile.streakDays >= 3 ? styles.statGold : styles.statDim}>{profile.streakDays}日</Text>
-            </View>
-            <View style={styles.statChip}>
-              <Text>✅</Text>
-              <Text style={styles.statDim}>{completedCount}/{tasks.length}</Text>
-            </View>
-            <View style={styles.statChip}>
-              <Text>💰</Text>
-              <Text style={styles.statGold}>{profile.points} Pt</Text>
+            <View style={styles.playerStats}>
+              <View style={styles.statChip}>
+                <Text>{profile.streakDays >= 3 ? "🔥" : "💧"}</Text>
+                <Text style={styles.statValue}>{profile.streakDays}日</Text>
+              </View>
+              <View style={styles.statChip}>
+                <Text>💰</Text>
+                <Text style={styles.statGold}>{profile.points} Pt</Text>
+              </View>
             </View>
           </View>
         </RPGBox>
 
-        {/* 装備バー */}
-        <TouchableOpacity onPress={() => router.push("/character")}>
-          <RPGBox style={{ padding: 12 }}>
-            <View style={styles.equipRow}>
-              {equippedItems.length > 0 ? (
-                equippedItems.map((item) => (
-                  <Text key={item.userItemId} style={styles.equipItem}>{item.iconEmoji} {item.name}</Text>
-                ))
-              ) : (
-                <Text style={styles.statDim}>装備・称号は未設定</Text>
-              )}
-              <Text style={styles.profileLink}>👤 プロフィール →</Text>
-            </View>
-          </RPGBox>
-        </TouchableOpacity>
+        {/* エネルギーバー（今日の進捗） */}
+        <RPGBox style={{ padding: 14 }}>
+          <View style={styles.energyHeader}>
+            <Text style={styles.energyLabel}>⚡ 今日のエネルギー</Text>
+            <Text style={styles.energyCount}>{completedCount}/{totalCount}</Text>
+          </View>
+          <View style={styles.energyBarBg}>
+            <View
+              style={[
+                styles.energyBarFill,
+                {
+                  width: `${energyPct}%`,
+                  backgroundColor: energyPct >= 100 ? Colors.green : Colors.gold,
+                },
+              ]}
+            />
+          </View>
+          {energyPct >= 100 && (
+            <Text style={styles.energyComplete}>🎉 全タスク完了！お疲れさま！</Text>
+          )}
+        </RPGBox>
 
-        {/* タスクリスト */}
-        <View style={styles.section}>
+        {/* キャラカード一覧 */}
+        <View style={styles.charSection}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>📋 今日のタスク</Text>
+            <Text style={styles.sectionTitle}>🤝 仲間たち</Text>
             <View style={styles.sectionLine} />
+            {unlockStatus && (
+              <Text style={styles.charCountLabel}>
+                {chars.length}/{unlockStatus.maxCharacters}
+              </Text>
+            )}
           </View>
 
-          {tasks.length === 0 ? (
-            <RPGBox style={{ alignItems: "center", paddingVertical: 48 }}>
-              <Text style={{ fontSize: 40 }}>📋</Text>
-              <Text style={styles.statDim}>今日のタスクはまだありません</Text>
-              <Text style={[styles.statDim, { fontSize: FontSize.xs }]}>タスクタブから追加しましょう</Text>
-            </RPGBox>
-          ) : (
-            <View style={{ gap: 8 }}>
-              {normalTasks.map((task) => (
-                <TaskCard key={task.id} task={task} onComplete={handleComplete} onUndo={handleUndo} isPending={pendingTaskId === task.id} />
-              ))}
-              {bonusTasks.length > 0 && (
-                <>
-                  <View style={styles.bonusDivider}>
-                    <View style={styles.bonusDividerLine} />
-                    <Text style={styles.bonusDividerText}>ボーナス</Text>
-                    <View style={styles.bonusDividerLine} />
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 12, paddingHorizontal: 2 }}
+          >
+            {chars.map((char) => {
+              const charTasks = tasks.filter((t) => t.userCharacterId === char.id);
+              const charDone = charTasks.filter((t) => t.isCompleted).length;
+              const charTotal = charTasks.length;
+              const charXpPct = char.level > 0
+                ? Math.round(((char.currentXp - char.level * (char.level - 1) * 5) / (char.level * 10)) * 100)
+                : Math.round((char.currentXp / 10) * 100);
+              const stageEmoji = STAGE_EMOJI[char.stage] ?? "🥚";
+
+              return (
+                <TouchableOpacity
+                  key={char.id}
+                  style={styles.charCard}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.charEmoji}>{stageEmoji}</Text>
+                  <Text style={styles.charName} numberOfLines={1}>
+                    {char.nickname ?? char.characterName}
+                  </Text>
+                  <Text style={styles.charLevel}>Lv.{char.level}</Text>
+                  <View style={styles.charXpBar}>
+                    <View style={[styles.xpBarFill, { width: `${Math.min(100, Math.max(0, charXpPct))}%`, backgroundColor: Colors.gold }]} />
                   </View>
-                  {bonusTasks.map((task) => (
-                    <TaskCard key={task.id} task={task} onComplete={handleComplete} onUndo={handleUndo} isPending={pendingTaskId === task.id} />
-                  ))}
-                </>
-              )}
-            </View>
-          )}
+                  <Text style={styles.charProgress}>
+                    {charDone}/{charTotal} 完了
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+
+            {/* 新しい仲間を追加 */}
+            {unlockStatus && chars.length < unlockStatus.maxCharacters && (
+              <TouchableOpacity
+                style={[styles.charCard, styles.charCardAdd]}
+                onPress={() => {
+                  // TODO: キャラ追加画面
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.addCharIcon}>+</Text>
+                <Text style={styles.addCharLabel}>仲間を{"\n"}追加</Text>
+              </TouchableOpacity>
+            )}
+          </ScrollView>
         </View>
+
+        {/* キャラ別タスクリスト */}
+        {tasksByChar.map(({ char, tasks: charTasks }) => {
+          if (charTasks.length === 0) return null;
+          const stageEmoji = STAGE_EMOJI[char.stage] ?? "🥚";
+
+          return (
+            <View key={char.id} style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>
+                  {stageEmoji} {char.nickname ?? char.characterName}のタスク
+                </Text>
+                <View style={styles.sectionLine} />
+              </View>
+
+              <View style={{ gap: 8 }}>
+                {charTasks.map((task) => (
+                  <TaskCardV2
+                    key={task.id}
+                    task={task}
+                    onComplete={handleComplete}
+                    onUndo={handleUndo}
+                    isPending={pendingTaskId === task.id}
+                  />
+                ))}
+              </View>
+            </View>
+          );
+        })}
+
+        {tasks.length === 0 && (
+          <RPGBox style={{ alignItems: "center", paddingVertical: 48 }}>
+            <Text style={{ fontSize: 40 }}>📋</Text>
+            <Text style={styles.emptyText}>今日のタスクはまだありません</Text>
+          </RPGBox>
+        )}
       </ScrollView>
 
       <XPPopup
@@ -264,14 +330,17 @@ export default function DashboardScreen() {
   );
 }
 
-// ─── タスクカード ───────────────────────────────────────────────
+// ─── タスクカード v2 ──────────────────────────────────────────────
 
-function TaskCard({ task, onComplete, onUndo, isPending }: {
-  task: DailyTask; onComplete: (id: string) => void; onUndo: (id: string) => void; isPending: boolean;
+function TaskCardV2({ task, onComplete, onUndo, isPending }: {
+  task: DailyTaskV2;
+  onComplete: (id: string) => void;
+  onUndo: (id: string) => void;
+  isPending: boolean;
 }) {
   return (
     <RPGBox
-      variant={task.isCompleted ? "green" : task.isBonus ? "gold" : "default"}
+      variant={task.isCompleted ? "green" : task.source === "ad_bonus" ? "gold" : "default"}
       style={{ opacity: task.isCompleted ? 0.72 : 1, padding: 14 }}
     >
       <View style={styles.taskRow}>
@@ -286,10 +355,16 @@ function TaskCard({ task, onComplete, onUndo, isPending }: {
           {task.isCompleted && <Text style={styles.checkmark}>✓</Text>}
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.taskTitle, task.isCompleted && styles.taskTitleDone]}>{task.title}</Text>
-          {task.description && <Text style={styles.taskDesc}>{task.description}</Text>}
+          <Text style={[styles.taskTitle, task.isCompleted && styles.taskTitleDone]}>
+            {task.title}
+          </Text>
+          <Text style={styles.taskLevelLabel}>{task.levelLabel}</Text>
         </View>
-        <Text style={{ fontSize: FontSize.xs, fontWeight: "700", color: task.isCompleted ? Colors.green : Colors.gold }}>
+        <Text style={{
+          fontSize: FontSize.xs,
+          fontWeight: "700",
+          color: task.isCompleted ? Colors.green : Colors.gold,
+        }}>
           +{task.rewardXp} EXP
         </Text>
       </View>
@@ -304,35 +379,68 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   loadingText: { fontSize: FontSize.base, color: Colors.gold },
   scrollContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 40 },
-  companionGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  companionCard: { flex: 1, minWidth: "45%", borderWidth: 1, borderRadius: BorderRadius.md, backgroundColor: Colors.card, padding: 12, alignItems: "center", gap: 4 },
-  companionIcon: { fontSize: 28 },
-  companionLabel: { fontSize: FontSize.xs, fontWeight: "600" },
-  companionLevel: { fontSize: FontSize.sm, fontWeight: "700" },
-  companionHabits: { fontSize: FontSize.xs },
-  xpBarBg: { width: "100%", height: 4, backgroundColor: Colors.border, borderRadius: 99, overflow: "hidden" },
-  xpBarBgWide: { flex: 1, height: 6, backgroundColor: Colors.border, borderRadius: 99, overflow: "hidden", marginHorizontal: 8 },
+
+  // Player status
+  playerRow: { flexDirection: "row", alignItems: "center", gap: 16 },
+  playerInfo: { flex: 1, gap: 6 },
+  playerName: { fontSize: FontSize.lg, fontWeight: "700", color: Colors.text },
+  levelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  levelLabel: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.gold, width: 42 },
+  xpBarBg: { flex: 1, height: 6, backgroundColor: Colors.border, borderRadius: 99, overflow: "hidden" },
   xpBarFill: { height: "100%", borderRadius: 99 },
-  statsRow: { flexDirection: "row", alignItems: "center", gap: 12, flexWrap: "wrap" },
-  statItem: { flexDirection: "row", alignItems: "center", flex: 1, minWidth: 100 },
+  xpText: { fontSize: FontSize.xs, color: Colors.dim, width: 42, textAlign: "right" },
+  playerStats: { gap: 6 },
   statChip: { flexDirection: "row", alignItems: "center", gap: 4 },
-  statLabel: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.gold },
-  statGold: { fontSize: FontSize.sm, color: Colors.gold },
-  statDim: { fontSize: FontSize.sm, color: Colors.dim },
-  equipRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  equipItem: { fontSize: FontSize.sm, color: Colors.dim },
-  profileLink: { fontSize: FontSize.sm, color: Colors.dim, marginLeft: "auto" },
+  statValue: { fontSize: FontSize.sm, color: Colors.dim },
+  statGold: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.gold },
+
+  // Energy bar
+  energyHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
+  energyLabel: { fontSize: FontSize.sm, fontWeight: "600", color: Colors.text },
+  energyCount: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.gold },
+  energyBarBg: { height: 10, backgroundColor: Colors.border, borderRadius: 5, overflow: "hidden" },
+  energyBarFill: { height: "100%", borderRadius: 5 },
+  energyComplete: { fontSize: FontSize.xs, color: Colors.green, fontWeight: "600", textAlign: "center", marginTop: 6 },
+
+  // Character cards
+  charSection: { gap: 10 },
+  charCard: {
+    width: 110,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: BorderRadius.lg,
+    padding: 12,
+    alignItems: "center",
+    gap: 4,
+  },
+  charCardAdd: {
+    justifyContent: "center",
+    borderStyle: "dashed",
+    borderColor: Colors.dim,
+  },
+  charEmoji: { fontSize: 36 },
+  charName: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.text },
+  charLevel: { fontSize: FontSize.xs, fontWeight: "600", color: Colors.gold },
+  charXpBar: { width: "100%", height: 4, backgroundColor: Colors.border, borderRadius: 99, overflow: "hidden" },
+  charProgress: { fontSize: 10, color: Colors.dim },
+  addCharIcon: { fontSize: 32, color: Colors.dim, fontWeight: "300" },
+  addCharLabel: { fontSize: FontSize.xs, color: Colors.dim, textAlign: "center" },
+  charCountLabel: { fontSize: FontSize.xs, color: Colors.dim },
+
+  // Section
   section: { gap: 10 },
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
   sectionTitle: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.gold },
   sectionLine: { flex: 1, height: 1, backgroundColor: Colors.borderGold },
+
+  // Task card
   taskRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   checkbox: { width: 24, height: 24, borderWidth: 1.5, borderRadius: 5, alignItems: "center", justifyContent: "center", marginTop: 2 },
   checkmark: { color: Colors.white, fontSize: 14, fontWeight: "700" },
   taskTitle: { fontSize: FontSize.base, color: Colors.text, lineHeight: 20 },
   taskTitleDone: { color: Colors.dim, textDecorationLine: "line-through" },
-  taskDesc: { fontSize: FontSize.sm, color: Colors.dim, marginTop: 4 },
-  bonusDivider: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
-  bonusDividerLine: { flex: 1, height: 1, backgroundColor: Colors.borderGold },
-  bonusDividerText: { fontSize: FontSize.xs, color: Colors.gold, fontWeight: "600" },
+  taskLevelLabel: { fontSize: FontSize.xs, color: Colors.dim, marginTop: 2 },
+
+  emptyText: { fontSize: FontSize.sm, color: Colors.dim, marginTop: 8 },
 });

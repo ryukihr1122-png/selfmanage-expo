@@ -64,9 +64,9 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="stats"
           options={{
-            title: "ステータス",
+            title: "仲間",
             tabBarIcon: ({ focused }) => (
-              <TabIcon emoji="📊" focused={focused} />
+              <TabIcon emoji="🤝" focused={focused} />
             ),
           }}
         />

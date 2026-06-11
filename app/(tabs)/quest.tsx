@@ -1,7 +1,12 @@
 /**
- * タスク管理画面（ローカルファースト版）
+ * タスク管理画面（v2 キャラクター育成版）
+ *
+ * - キャラ別タスク一覧（完了 / 取り消し）
+ * - タスクの追加 / 削除
+ * - タスクレベルアップ
+ * - 広告ボーナスタスク
  */
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,728 +17,646 @@ import {
   StyleSheet,
   Alert,
 } from "react-native";
+import { useFocusEffect } from "expo-router";
 import {
-  getTodayTasks,
-  getRecurringTasks,
-  getTaskHistory,
-  createRecurringTask,
-  createTask,
-  completeTask,
-  undoTask,
-  deleteRecurringTask,
-  claimAdRewardTask,
-  getAdRewardRemaining,
-  type DailyTask,
-  type RecurringTask,
-  type HistoryDay,
-} from "@/db/repository";
+  getUserCharacters,
+  getTodayTasksV2,
+  getUserTasks,
+  getGenreTasks,
+  getTaskLevels,
+  completeTaskV2,
+  undoTaskV2,
+  addUserTask,
+  removeUserTask,
+  upgradeTaskLevel,
+  claimAdRewardTaskV2,
+  getPlayerUnlockStatus,
+  type UserCharacter,
+  type DailyTaskV2,
+  type UserTask,
+  type GenreTask,
+  type TaskLevel,
+  type PlayerUnlockStatus,
+} from "@/db/character-repository";
 import { showRewardedAd } from "@/lib/admob";
 import { RPGBox } from "@/components/RPGBox";
 import { RPGButton } from "@/components/RPGButton";
-import { RPGInput } from "@/components/RPGInput";
+import { haptic } from "@/lib/haptics";
 import { Colors, FontSize, Spacing, BorderRadius } from "@/constants/theme";
 
-// ─── カテゴリ選択 ─────────────────────────────────────────────
-
-const CATEGORIES = [
-  { key: "wellness", icon: "💧", label: "ウェルネス", color: "#4caf50" },
-  { key: "action", icon: "🔥", label: "アクション", color: "#e53935" },
-  { key: "knowledge", icon: "📚", label: "ナレッジ", color: "#1e88e5" },
-  { key: "purpose", icon: "🌟", label: "パーパス", color: "#f9a825" },
-] as const;
-
-const SCHEDULES = [
-  { key: "daily", label: "毎日" },
-  { key: "weekdays", label: "平日のみ" },
-  { key: "weekends", label: "週末のみ" },
-] as const;
-
-const XP_OPTIONS = [5, 10, 15, 20, 25, 30] as const;
-
-// ─── タスク作成モーダル ─────────────────────────────────────────
-
-function CreateTaskModal({
-  visible,
-  onClose,
-  onCreated,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [category, setCategory] = useState("wellness");
-  const [rewardXp, setRewardXp] = useState(10);
-  const [isRecurring, setIsRecurring] = useState(false);
-  const [schedule, setSchedule] = useState("daily");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleCreate = async () => {
-    if (!title.trim()) {
-      setError("タスク名を入力してください");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      if (isRecurring) {
-        await createRecurringTask({
-          title: title.trim(),
-          description: description.trim() || undefined,
-          category,
-          rewardXp,
-          schedule,
-        });
-      } else {
-        await createTask({
-          title: title.trim(),
-          description: description.trim() || undefined,
-          category,
-          rewardXp,
-        });
-      }
-      setTitle("");
-      setDescription("");
-      setCategory("wellness");
-      setRewardXp(10);
-      setIsRecurring(false);
-      onCreated();
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "作成に失敗しました");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>🆕 タスクを作成</Text>
-
-          <RPGInput
-            label="タスク名"
-            placeholder="例: 朝のストレッチ 10分"
-            value={title}
-            onChangeText={setTitle}
-          />
-          <RPGInput
-            label="説明（任意）"
-            placeholder="具体的な行動を書くと取り組みやすくなります"
-            value={description}
-            onChangeText={setDescription}
-            multiline
-            numberOfLines={2}
-          />
-
-          {/* カテゴリ選択 */}
-          <Text style={styles.fieldLabel}>カテゴリ</Text>
-          <View style={styles.chipRow}>
-            {CATEGORIES.map((c) => (
-              <TouchableOpacity
-                key={c.key}
-                onPress={() => setCategory(c.key)}
-                style={[
-                  styles.chip,
-                  {
-                    borderColor: category === c.key ? c.color : Colors.border,
-                    backgroundColor:
-                      category === c.key ? `${c.color}15` : "transparent",
-                  },
-                ]}
-              >
-                <Text>{c.icon}</Text>
-                <Text
-                  style={[
-                    styles.chipText,
-                    { color: category === c.key ? c.color : Colors.dim },
-                  ]}
-                >
-                  {c.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* EXP設定 */}
-          <Text style={styles.fieldLabel}>難易度（EXP）</Text>
-          <View style={styles.chipRow}>
-            {XP_OPTIONS.map((xp) => (
-              <TouchableOpacity
-                key={xp}
-                onPress={() => setRewardXp(xp)}
-                style={[
-                  styles.xpChip,
-                  {
-                    borderColor: rewardXp === xp ? Colors.gold : Colors.border,
-                    backgroundColor:
-                      rewardXp === xp ? Colors.goldGlow : "transparent",
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.xpChipText,
-                    { color: rewardXp === xp ? Colors.gold : Colors.dim },
-                  ]}
-                >
-                  {xp}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* 繰り返し設定 */}
-          <TouchableOpacity
-            style={styles.toggleRow}
-            onPress={() => setIsRecurring(!isRecurring)}
-          >
-            <View
-              style={[
-                styles.toggleBox,
-                isRecurring && { backgroundColor: Colors.gold, borderColor: Colors.gold },
-              ]}
-            >
-              {isRecurring && <Text style={styles.toggleCheck}>✓</Text>}
-            </View>
-            <Text style={styles.toggleLabel}>繰り返しタスクにする</Text>
-          </TouchableOpacity>
-
-          {isRecurring && (
-            <View style={styles.chipRow}>
-              {SCHEDULES.map((s) => (
-                <TouchableOpacity
-                  key={s.key}
-                  onPress={() => setSchedule(s.key)}
-                  style={[
-                    styles.chip,
-                    {
-                      borderColor:
-                        schedule === s.key ? Colors.gold : Colors.border,
-                      backgroundColor:
-                        schedule === s.key ? Colors.goldGlow : "transparent",
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      { color: schedule === s.key ? Colors.gold : Colors.dim },
-                    ]}
-                  >
-                    {s.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {error && <Text style={styles.errorText}>{error}</Text>}
-
-          <View style={styles.modalActions}>
-            <RPGButton
-              title="キャンセル"
-              variant="secondary"
-              onPress={onClose}
-              style={{ flex: 1 }}
-            />
-            <RPGButton
-              title="作成"
-              onPress={handleCreate}
-              loading={loading}
-              style={{ flex: 1 }}
-              icon="✨"
-            />
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-// ─── メイン ────────────────────────────────────────────────────
+const STAGE_EMOJI: Record<number, string> = {
+  0: "🥚", 1: "🐣", 2: "🐥", 3: "🐉", 4: "✨",
+};
 
 export default function QuestScreen() {
-  const [tasks, setTasks] = useState<DailyTask[]>([]);
-  const [recurringTasks, setRecurringTasksList] = useState<RecurringTask[]>([]);
-  const [history, setHistory] = useState<HistoryDay[]>([]);
+  const [chars, setChars] = useState<UserCharacter[]>([]);
+  const [tasks, setTasks] = useState<DailyTaskV2[]>([]);
+  const [userTasks, setUserTasks] = useState<Record<string, UserTask[]>>({});
+  const [unlockStatus, setUnlockStatus] = useState<PlayerUnlockStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
-  const [tab, setTab] = useState<"today" | "recurring" | "history">("today");
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
-  const [adRemaining, setAdRemaining] = useState(3);
+  const [selectedCharId, setSelectedCharId] = useState<string | null>(null);
+
+  // タスク追加モーダル
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addModalCharId, setAddModalCharId] = useState<string | null>(null);
+  const [addModalGenreId, setAddModalGenreId] = useState<string | null>(null);
+  const [availableTasks, setAvailableTasks] = useState<GenreTask[]>([]);
+  const [existingTaskIds, setExistingTaskIds] = useState<string[]>([]);
+
+  // タスク詳細モーダル
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [detailTask, setDetailTask] = useState<UserTask | null>(null);
+  const [detailLevels, setDetailLevels] = useState<TaskLevel[]>([]);
 
   const load = useCallback(async () => {
     try {
-      const [t, recurring, hist, remaining] = await Promise.all([
-        getTodayTasks(),
-        getRecurringTasks().catch(() => [] as RecurringTask[]),
-        getTaskHistory(14).catch(() => [] as HistoryDay[]),
-        getAdRewardRemaining().catch(() => 3),
+      const [c, t, u] = await Promise.all([
+        getUserCharacters(),
+        getTodayTasksV2(),
+        getPlayerUnlockStatus(),
       ]);
+      setChars(c);
       setTasks(t);
-      setRecurringTasksList(recurring);
-      setHistory(hist);
-      setAdRemaining(remaining);
+      setUnlockStatus(u);
+
+      // キャラ別にユーザータスクをロード
+      const utMap: Record<string, UserTask[]> = {};
+      for (const char of c) {
+        utMap[char.id] = await getUserTasks(char.id);
+      }
+      setUserTasks(utMap);
+
+      // 最初のキャラを選択
+      if (!selectedCharId && c.length > 0) {
+        setSelectedCharId(c[0].id);
+      }
     } catch {
       // ignore
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedCharId]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const handleComplete = useCallback(
-    async (taskId: string) => {
-      if (pendingTaskId) return;
-      setPendingTaskId(taskId);
-      try {
-        await completeTask(taskId);
-        setTasks((prev) =>
-          prev.map((t) =>
-            t.id === taskId
-              ? { ...t, isCompleted: true, completedAt: new Date().toISOString() }
-              : t,
-          ),
-        );
-      } catch (err) {
-        Alert.alert("エラー", err instanceof Error ? err.message : "操作に失敗");
-      } finally {
-        setPendingTaskId(null);
-      }
-    },
-    [pendingTaskId],
+  useFocusEffect(
+    useCallback(() => { load(); }, [load])
   );
 
-  const handleUndo = useCallback(
-    async (taskId: string) => {
-      if (pendingTaskId) return;
-      setPendingTaskId(taskId);
-      try {
-        await undoTask(taskId);
-        setTasks((prev) =>
-          prev.map((t) =>
-            t.id === taskId ? { ...t, isCompleted: false, completedAt: null } : t,
-          ),
-        );
-      } catch (err) {
-        Alert.alert("エラー", err instanceof Error ? err.message : "操作に失敗");
-      } finally {
-        setPendingTaskId(null);
-      }
-    },
-    [pendingTaskId],
-  );
+  // タスク完了
+  const handleComplete = useCallback(async (taskId: string) => {
+    if (pendingTaskId) return;
+    setPendingTaskId(taskId);
+    try {
+      const res = await completeTaskV2(taskId);
+      setTasks((prev) => prev.map((t) =>
+        t.id === taskId ? { ...t, isCompleted: true, completedAt: new Date().toISOString() } : t,
+      ));
 
-  const handleAdReward = useCallback(async () => {
-    if (adRemaining <= 0) {
-      Alert.alert("上限", "本日の広告視聴上限に達しました");
-      return;
+      if (res.characterLevelUp) {
+        haptic.levelUp();
+      } else {
+        haptic.complete();
+      }
+
+      // 結果通知
+      const msgs: string[] = [`+${res.earnedXp} EXP`];
+      if (res.characterNewStage) msgs.push(`進化: ${res.characterNewStage}！`);
+      if (res.playerLevelUp) msgs.push("プレイヤーレベルアップ！");
+      if (res.playerNewUnlock) msgs.push(res.playerNewUnlock);
+      if (res.taskCanUpgrade) msgs.push("タスクレベルアップ可能！");
+
+      if (msgs.length > 1) {
+        Alert.alert("🎉 タスク完了！", msgs.join("\n"));
+      }
+
+      // データリロード
+      const newChars = await getUserCharacters();
+      setChars(newChars);
+      if (selectedCharId) {
+        setUserTasks((prev) => ({ ...prev }));
+        const ut = await getUserTasks(selectedCharId);
+        setUserTasks((prev) => ({ ...prev, [selectedCharId]: ut }));
+      }
+    } catch {
+      // ignore
+    } finally {
+      setPendingTaskId(null);
     }
+  }, [pendingTaskId, selectedCharId]);
+
+  // タスク取り消し
+  const handleUndo = useCallback(async (taskId: string) => {
+    if (pendingTaskId) return;
+    setPendingTaskId(taskId);
+    try {
+      await undoTaskV2(taskId);
+      setTasks((prev) => prev.map((t) =>
+        t.id === taskId ? { ...t, isCompleted: false, completedAt: null } : t,
+      ));
+      const newChars = await getUserCharacters();
+      setChars(newChars);
+    } catch {
+      // ignore
+    } finally {
+      setPendingTaskId(null);
+    }
+  }, [pendingTaskId]);
+
+  // 広告ボーナス
+  const handleAdReward = useCallback(async (charId: string) => {
     try {
       const watched = await showRewardedAd();
       if (!watched) return;
-      const res = await claimAdRewardTask();
+      const res = await claimAdRewardTaskV2(charId);
       setTasks((prev) => [...prev, res.task]);
-      setAdRemaining(res.remainingToday);
-      Alert.alert("獲得!", `「${res.task.title}」が追加されました！`);
+      Alert.alert("🎁 ボーナス獲得！", `「${res.task.title}」が追加されました！\n残り${res.remainingToday}回`);
     } catch (err) {
       Alert.alert("エラー", err instanceof Error ? err.message : "取得に失敗");
     }
-  }, [adRemaining]);
+  }, []);
 
-  const handleDeleteRecurring = useCallback(async (id: string) => {
-    Alert.alert("削除", "この繰り返しタスクを削除しますか？", [
+  // タスク追加モーダルを開く
+  const openAddModal = useCallback(async (charId: string, genreId: string) => {
+    const [genre, existing] = await Promise.all([
+      getGenreTasks(genreId),
+      getUserTasks(charId),
+    ]);
+    const existIds = existing.map((t) => t.genreTaskId);
+    setAvailableTasks(genre);
+    setExistingTaskIds(existIds);
+    setAddModalCharId(charId);
+    setAddModalGenreId(genreId);
+    setShowAddModal(true);
+  }, []);
+
+  // タスク追加実行
+  const handleAddTask = useCallback(async (genreTaskId: string) => {
+    if (!addModalCharId) return;
+    try {
+      await addUserTask(addModalCharId, genreTaskId);
+      setExistingTaskIds((prev) => [...prev, genreTaskId]);
+      // リロード
+      const ut = await getUserTasks(addModalCharId);
+      setUserTasks((prev) => ({ ...prev, [addModalCharId]: ut }));
+      haptic.complete();
+    } catch (err) {
+      Alert.alert("エラー", err instanceof Error ? err.message : "追加に失敗");
+    }
+  }, [addModalCharId]);
+
+  // タスク削除
+  const handleRemoveTask = useCallback(async (userTaskId: string, charId: string) => {
+    Alert.alert("タスクを外す", "このタスクを日課から外しますか？", [
       { text: "キャンセル", style: "cancel" },
       {
-        text: "削除",
+        text: "外す",
         style: "destructive",
         onPress: async () => {
           try {
-            await deleteRecurringTask(id);
-            setRecurringTasksList((prev) => prev.filter((t) => t.id !== id));
+            await removeUserTask(userTaskId);
+            const ut = await getUserTasks(charId);
+            setUserTasks((prev) => ({ ...prev, [charId]: ut }));
+            load(); // タスクリストも更新
           } catch (err) {
             Alert.alert("エラー", err instanceof Error ? err.message : "削除に失敗");
           }
         },
       },
     ]);
+  }, [load]);
+
+  // タスクレベルアップ
+  const handleUpgrade = useCallback(async (userTaskId: string, charId: string) => {
+    try {
+      const success = await upgradeTaskLevel(userTaskId);
+      if (success) {
+        Alert.alert("⬆️ レベルアップ！", "タスクの難易度が上がりました！獲得EXPも増加します。");
+        haptic.levelUp();
+        const ut = await getUserTasks(charId);
+        setUserTasks((prev) => ({ ...prev, [charId]: ut }));
+        load();
+      } else {
+        Alert.alert("条件未達", "レベルアップに必要な達成回数が足りません。");
+      }
+    } catch (err) {
+      Alert.alert("エラー", err instanceof Error ? err.message : "レベルアップに失敗");
+    }
+  }, [load]);
+
+  // タスク詳細モーダルを開く
+  const openDetailModal = useCallback(async (ut: UserTask) => {
+    const levels = await getTaskLevels(ut.genreTaskId);
+    setDetailTask(ut);
+    setDetailLevels(levels);
+    setShowDetailModal(true);
   }, []);
 
-  const tabDef = [
-    { key: "today" as const, label: "今日", icon: "📋" },
-    { key: "recurring" as const, label: "習慣", icon: "🔄" },
-    { key: "history" as const, label: "履歴", icon: "📅" },
-  ];
+  const selectedChar = chars.find((c) => c.id === selectedCharId);
+  const charTasks = selectedCharId
+    ? tasks.filter((t) => t.userCharacterId === selectedCharId)
+    : [];
+  const charUserTasks = selectedCharId ? (userTasks[selectedCharId] ?? []) : [];
 
   return (
     <View style={styles.flex}>
-      {/* タブ切替 */}
-      <View style={styles.tabBar}>
-        {tabDef.map((t) => (
-          <TouchableOpacity
-            key={t.key}
-            onPress={() => setTab(t.key)}
-            style={[styles.tabItem, tab === t.key && styles.tabItemActive]}
-          >
-            <Text
-              style={[
-                styles.tabText,
-                tab === t.key && styles.tabTextActive,
-              ]}
+      {/* キャラ選択タブ */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.charTabBar}
+        contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
+      >
+        {chars.map((char) => {
+          const isActive = selectedCharId === char.id;
+          const stageEmoji = STAGE_EMOJI[char.stage] ?? "🥚";
+          const charDone = tasks.filter((t) => t.userCharacterId === char.id && t.isCompleted).length;
+          const charTotal = tasks.filter((t) => t.userCharacterId === char.id).length;
+          return (
+            <TouchableOpacity
+              key={char.id}
+              onPress={() => setSelectedCharId(char.id)}
+              style={[styles.charTab, isActive && styles.charTabActive]}
             >
-              {t.icon} {t.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+              <Text style={styles.charTabEmoji}>{stageEmoji}</Text>
+              <Text style={[styles.charTabName, isActive && styles.charTabNameActive]} numberOfLines={1}>
+                {char.nickname ?? char.characterName}
+              </Text>
+              <Text style={[styles.charTabProgress, isActive && { color: Colors.gold }]}>
+                {charDone}/{charTotal}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              load();
-            }}
-            tintColor={Colors.gold}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.gold} />
         }
       >
-        {/* ─── 今日タブ ─── */}
-        {tab === "today" && (
-          <>
-            {/* 広告視聴ボタン */}
-            <RPGBox variant="gold" style={{ padding: 14 }}>
-              <TouchableOpacity onPress={handleAdReward} style={styles.adRow}>
-                <View>
-                  <Text style={styles.adTitle}>🎬 広告を見てタスクを獲得</Text>
-                  <Text style={styles.adSub}>
-                    ボーナスタスク（EXP 1.5倍）が手に入ります
+        {/* キャラステータス */}
+        {selectedChar && (
+          <RPGBox style={{ padding: 14 }}>
+            <View style={styles.charStatusRow}>
+              <Text style={{ fontSize: 40 }}>{STAGE_EMOJI[selectedChar.stage] ?? "🥚"}</Text>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text style={styles.charName}>
+                  {selectedChar.nickname ?? selectedChar.characterName}
+                </Text>
+                <View style={styles.levelRow}>
+                  <Text style={styles.levelLabel}>Lv.{selectedChar.level}</Text>
+                  <View style={styles.xpBarBg}>
+                    <View style={[styles.xpBarFill, {
+                      width: `${Math.min(100, Math.max(0,
+                        selectedChar.level > 0
+                          ? ((selectedChar.currentXp - selectedChar.level * (selectedChar.level - 1) * 5) / (selectedChar.level * 10)) * 100
+                          : (selectedChar.currentXp / 10) * 100
+                      ))}%`,
+                    }]} />
+                  </View>
+                </View>
+                <Text style={styles.charXpText}>
+                  Total XP: {selectedChar.currentXp}
+                </Text>
+              </View>
+            </View>
+          </RPGBox>
+        )}
+
+        {/* 今日のタスク */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>📋 今日のタスク</Text>
+          <View style={styles.sectionLine} />
+        </View>
+
+        {charTasks.length === 0 ? (
+          <RPGBox style={{ alignItems: "center", paddingVertical: 32 }}>
+            <Text style={{ fontSize: 32 }}>📋</Text>
+            <Text style={styles.emptyText}>タスクがありません</Text>
+          </RPGBox>
+        ) : (
+          charTasks.map((task) => (
+            <RPGBox
+              key={task.id}
+              variant={task.isCompleted ? "green" : task.source === "ad_bonus" ? "gold" : "default"}
+              style={{ opacity: task.isCompleted ? 0.72 : 1, padding: 14 }}
+            >
+              <View style={styles.taskRow}>
+                <TouchableOpacity
+                  onPress={() => (task.isCompleted ? handleUndo(task.id) : handleComplete(task.id))}
+                  disabled={pendingTaskId === task.id}
+                  style={[styles.checkbox, {
+                    borderColor: task.isCompleted ? Colors.green : Colors.border,
+                    backgroundColor: task.isCompleted ? Colors.green : "transparent",
+                  }]}
+                >
+                  {task.isCompleted && <Text style={styles.checkmark}>✓</Text>}
+                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.taskTitle, task.isCompleted && styles.taskTitleDone]}>
+                    {task.title}
+                  </Text>
+                  <Text style={styles.taskLevelLabel}>{task.levelLabel}</Text>
+                </View>
+                <Text style={{
+                  fontSize: FontSize.xs,
+                  fontWeight: "700",
+                  color: task.isCompleted ? Colors.green : Colors.gold,
+                }}>
+                  +{task.rewardXp}
+                </Text>
+              </View>
+            </RPGBox>
+          ))
+        )}
+
+        {/* 広告ボーナス */}
+        {selectedCharId && (
+          <RPGBox variant="gold" style={{ padding: 14 }}>
+            <TouchableOpacity
+              onPress={() => handleAdReward(selectedCharId)}
+              style={styles.adRow}
+            >
+              <View>
+                <Text style={styles.adTitle}>🎬 広告でボーナスタスク</Text>
+                <Text style={styles.adSub}>EXP 1.5倍のボーナスタスクを獲得</Text>
+              </View>
+              <Text style={styles.adArrow}>→</Text>
+            </TouchableOpacity>
+          </RPGBox>
+        )}
+
+        {/* 日課管理 */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>⚙️ 日課管理</Text>
+          <View style={styles.sectionLine} />
+        </View>
+
+        {charUserTasks.map((ut) => (
+          <RPGBox key={ut.id} style={{ padding: 14 }}>
+            <TouchableOpacity
+              onPress={() => openDetailModal(ut)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.userTaskRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.taskTitle}>{ut.taskTitle}</Text>
+                  <Text style={styles.taskLevelLabel}>
+                    Lv.{ut.currentLevel} · {ut.totalCompletions}回達成
                   </Text>
                 </View>
-                <View style={styles.adBadge}>
-                  <Text style={styles.adBadgeText}>残り{adRemaining}回</Text>
-                </View>
-              </TouchableOpacity>
-            </RPGBox>
-
-            {/* タスクリスト */}
-            {tasks.length === 0 ? (
-              <RPGBox style={{ alignItems: "center", paddingVertical: 48 }}>
-                <Text style={{ fontSize: 40 }}>📋</Text>
-                <Text style={styles.emptyText}>タスクがありません</Text>
-                <Text style={styles.emptyHint}>
-                  下のボタンから追加しましょう
-                </Text>
-              </RPGBox>
-            ) : (
-              tasks.map((task) => (
-                <RPGBox
-                  key={task.id}
-                  variant={
-                    task.isCompleted
-                      ? "green"
-                      : task.isBonus
-                        ? "gold"
-                        : "default"
-                  }
-                  style={{
-                    opacity: task.isCompleted ? 0.72 : 1,
-                    padding: 14,
-                  }}
-                >
-                  <View style={styles.taskRow}>
+                <View style={styles.userTaskActions}>
+                  {ut.canUpgrade && (
                     <TouchableOpacity
-                      onPress={() =>
-                        task.isCompleted
-                          ? handleUndo(task.id)
-                          : handleComplete(task.id)
-                      }
-                      disabled={pendingTaskId === task.id}
-                      style={[
-                        styles.checkbox,
-                        {
-                          borderColor: task.isCompleted
-                            ? Colors.green
-                            : Colors.border,
-                          backgroundColor: task.isCompleted
-                            ? Colors.green
-                            : "transparent",
-                        },
-                      ]}
+                      onPress={() => selectedCharId && handleUpgrade(ut.id, selectedCharId)}
+                      style={styles.upgradeBadge}
                     >
-                      {task.isCompleted && (
-                        <Text style={styles.checkmark}>✓</Text>
-                      )}
+                      <Text style={styles.upgradeBadgeText}>⬆️ UP</Text>
                     </TouchableOpacity>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          styles.taskTitle,
-                          task.isCompleted && styles.taskTitleDone,
-                        ]}
-                      >
-                        {task.title}
-                      </Text>
-                      {task.description && (
-                        <Text style={styles.taskDesc}>{task.description}</Text>
-                      )}
-                    </View>
-                    <Text
-                      style={{
-                        fontSize: FontSize.xs,
-                        fontWeight: "700",
-                        color: task.isCompleted ? Colors.green : Colors.gold,
-                      }}
-                    >
-                      +{task.rewardXp} EXP
-                    </Text>
-                  </View>
-                </RPGBox>
-              ))
-            )}
-          </>
-        )}
+                  )}
+                  <TouchableOpacity
+                    onPress={() => selectedCharId && handleRemoveTask(ut.id, selectedCharId)}
+                  >
+                    <Text style={{ color: Colors.red, fontSize: 16 }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </RPGBox>
+        ))}
 
-        {/* ─── 習慣タブ ─── */}
-        {tab === "recurring" && (
-          <>
-            {recurringTasks.length === 0 ? (
-              <RPGBox style={{ alignItems: "center", paddingVertical: 48 }}>
-                <Text style={{ fontSize: 40 }}>🔄</Text>
-                <Text style={styles.emptyText}>繰り返しタスクがありません</Text>
-                <Text style={styles.emptyHint}>
-                  毎日の習慣を登録すると自動でタスクが追加されます
-                </Text>
-              </RPGBox>
-            ) : (
-              recurringTasks.map((rt) => {
-                const cat = CATEGORIES.find((c) => c.key === rt.category);
-                return (
-                  <RPGBox key={rt.id} style={{ padding: 14 }}>
-                    <View style={styles.taskRow}>
-                      <Text style={{ fontSize: 20 }}>{cat?.icon ?? "📌"}</Text>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.taskTitle}>{rt.title}</Text>
-                        <Text style={styles.taskDesc}>
-                          {SCHEDULES.find((s) => s.key === rt.schedule)?.label ??
-                            rt.schedule}{" "}
-                          · {rt.rewardXp} EXP
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        onPress={() => handleDeleteRecurring(rt.id)}
-                      >
-                        <Text style={{ color: Colors.red, fontSize: 18 }}>✕</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </RPGBox>
-                );
-              })
-            )}
-          </>
+        {/* タスク追加ボタン */}
+        {selectedChar && unlockStatus && charUserTasks.length < unlockStatus.maxTasksPerChar && (
+          <TouchableOpacity
+            onPress={() => openAddModal(selectedChar.id, selectedChar.genreId)}
+            style={styles.addTaskBtn}
+          >
+            <Text style={styles.addTaskText}>+ タスクを追加</Text>
+          </TouchableOpacity>
         )}
-
-        {/* ─── 履歴タブ ─── */}
-        {tab === "history" && (
-          <>
-            {history.length === 0 ? (
-              <RPGBox style={{ alignItems: "center", paddingVertical: 48 }}>
-                <Text style={{ fontSize: 40 }}>📅</Text>
-                <Text style={styles.emptyText}>まだ履歴がありません</Text>
-              </RPGBox>
-            ) : (
-              history.map((day) => (
-                <RPGBox key={day.date} style={{ padding: 14 }}>
-                  <View style={styles.historyRow}>
-                    <Text style={styles.historyDate}>{formatDate(day.date)}</Text>
-                    <View style={styles.historyStats}>
-                      <Text style={styles.historyChip}>
-                        ✅ {day.completedCount}
-                      </Text>
-                      <Text style={[styles.historyChip, { color: Colors.gold }]}>
-                        +{day.xpEarned} EXP
-                      </Text>
-                      <Text style={[styles.historyChip, { color: Colors.gold }]}>
-                        +{day.ptEarned} Pt
-                      </Text>
-                    </View>
-                  </View>
-                </RPGBox>
-              ))
-            )}
-          </>
+        {selectedChar && unlockStatus && charUserTasks.length >= unlockStatus.maxTasksPerChar && (
+          <Text style={styles.limitText}>
+            タスク枠: {charUserTasks.length}/{unlockStatus.maxTasksPerChar}（プレイヤーLvで解放）
+          </Text>
         )}
       </ScrollView>
 
-      {/* FAB — タスク作成 */}
-      {(tab === "today" || tab === "recurring") && (
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => setShowCreate(true)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.fabText}>+</Text>
-        </TouchableOpacity>
-      )}
+      {/* タスク追加モーダル */}
+      <Modal visible={showAddModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>📋 タスクを追加</Text>
+            <Text style={styles.modalSub}>日課に追加するタスクを選んでください</Text>
 
-      <CreateTaskModal
-        visible={showCreate}
-        onClose={() => setShowCreate(false)}
-        onCreated={load}
-      />
+            <ScrollView style={{ maxHeight: 400 }}>
+              {availableTasks.map((gt) => {
+                const isAdded = existingTaskIds.includes(gt.id);
+                return (
+                  <TouchableOpacity
+                    key={gt.id}
+                    onPress={() => !isAdded && handleAddTask(gt.id)}
+                    disabled={isAdded}
+                    style={[styles.addTaskItem, isAdded && { opacity: 0.5 }]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.taskTitle}>{gt.title}</Text>
+                      <Text style={styles.taskLevelLabel}>{gt.description}</Text>
+                    </View>
+                    <Text style={{ color: isAdded ? Colors.dim : Colors.gold, fontWeight: "700" }}>
+                      {isAdded ? "追加済" : "+追加"}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <RPGButton
+              title="閉じる"
+              variant="secondary"
+              onPress={() => setShowAddModal(false)}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* タスク詳細モーダル */}
+      <Modal visible={showDetailModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            {detailTask && (
+              <>
+                <Text style={styles.modalTitle}>{detailTask.taskTitle}</Text>
+                <Text style={styles.modalSub}>
+                  現在 Lv.{detailTask.currentLevel} · 累計 {detailTask.totalCompletions} 回達成
+                </Text>
+
+                <Text style={[styles.sectionTitle, { marginTop: 12 }]}>📊 レベル一覧</Text>
+                {detailLevels.map((lv) => {
+                  const isCurrent = lv.level === detailTask.currentLevel;
+                  const isLocked = lv.level > detailTask.currentLevel;
+                  return (
+                    <View
+                      key={lv.id}
+                      style={[
+                        styles.levelItem,
+                        isCurrent && { borderColor: Colors.gold, backgroundColor: Colors.goldGlow },
+                      ]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.taskTitle, isLocked && { color: Colors.dim }]}>
+                          Lv.{lv.level}: {lv.label}
+                        </Text>
+                        {lv.description && (
+                          <Text style={styles.taskLevelLabel}>{lv.description}</Text>
+                        )}
+                      </View>
+                      <View style={{ alignItems: "flex-end" }}>
+                        <Text style={{ fontSize: FontSize.xs, color: Colors.gold, fontWeight: "700" }}>
+                          ×{lv.xpMultiplier.toFixed(1)}
+                        </Text>
+                        {lv.requiredCompletions > 0 && (
+                          <Text style={{ fontSize: 10, color: Colors.dim }}>
+                            {lv.requiredCompletions}回必要
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
+              </>
+            )}
+
+            <RPGButton
+              title="閉じる"
+              variant="secondary"
+              onPress={() => setShowDetailModal(false)}
+            />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
-}
-
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
-  return `${d.getMonth() + 1}/${d.getDate()}（${weekdays[d.getDay()]}）`;
 }
 
 // ─── スタイル ──────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: Colors.bg },
-  scrollContent: { padding: Spacing.lg, gap: 10, paddingBottom: 80 },
+  scrollContent: { padding: Spacing.lg, gap: 10, paddingBottom: 40 },
 
-  // Tab bar
-  tabBar: {
-    flexDirection: "row",
+  // Character tab bar
+  charTabBar: {
     backgroundColor: Colors.card,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
+    maxHeight: 72,
   },
-  tabItem: {
-    flex: 1,
-    paddingVertical: 12,
+  charTab: {
     alignItems: "center",
-    borderBottomWidth: 2,
-    borderBottomColor: "transparent",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: BorderRadius.md,
+    gap: 2,
   },
-  tabItemActive: {
-    borderBottomColor: Colors.gold,
-  },
-  tabText: { fontSize: FontSize.sm, color: Colors.dim },
-  tabTextActive: { color: Colors.gold, fontWeight: "600" },
-
-  // Ad
-  adRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  adTitle: { fontSize: FontSize.md, fontWeight: "600", color: Colors.gold },
-  adSub: { fontSize: FontSize.xs, color: Colors.dim, marginTop: 2 },
-  adBadge: {
+  charTabActive: {
     backgroundColor: Colors.goldGlow,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
   },
-  adBadgeText: { fontSize: FontSize.xs, fontWeight: "600", color: Colors.gold },
+  charTabEmoji: { fontSize: 20 },
+  charTabName: { fontSize: 11, color: Colors.dim, fontWeight: "600", maxWidth: 70 },
+  charTabNameActive: { color: Colors.gold },
+  charTabProgress: { fontSize: 10, color: Colors.dim },
+
+  // Character status
+  charStatusRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  charName: { fontSize: FontSize.lg, fontWeight: "700", color: Colors.text },
+  levelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  levelLabel: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.gold, width: 40 },
+  xpBarBg: { flex: 1, height: 6, backgroundColor: Colors.border, borderRadius: 99, overflow: "hidden" },
+  xpBarFill: { height: "100%", borderRadius: 99, backgroundColor: Colors.gold },
+  charXpText: { fontSize: FontSize.xs, color: Colors.dim },
+
+  // Section
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
+  sectionTitle: { fontSize: FontSize.sm, fontWeight: "700", color: Colors.gold },
+  sectionLine: { flex: 1, height: 1, backgroundColor: Colors.borderGold },
 
   // Task
   taskRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
-  checkbox: {
-    width: 24,
-    height: 24,
-    borderWidth: 1.5,
-    borderRadius: 5,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 2,
-  },
+  checkbox: { width: 24, height: 24, borderWidth: 1.5, borderRadius: 5, alignItems: "center", justifyContent: "center", marginTop: 2 },
   checkmark: { color: Colors.white, fontSize: 14, fontWeight: "700" },
   taskTitle: { fontSize: FontSize.base, color: Colors.text },
   taskTitleDone: { color: Colors.dim, textDecorationLine: "line-through" },
-  taskDesc: { fontSize: FontSize.sm, color: Colors.dim, marginTop: 2 },
+  taskLevelLabel: { fontSize: FontSize.xs, color: Colors.dim, marginTop: 2 },
+
+  // User task management
+  userTaskRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  userTaskActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  upgradeBadge: {
+    backgroundColor: Colors.goldGlow,
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: Colors.gold,
+  },
+  upgradeBadgeText: { fontSize: FontSize.xs, fontWeight: "700", color: Colors.gold },
+
+  // Add task
+  addTaskBtn: {
+    borderWidth: 1.5,
+    borderColor: Colors.dim,
+    borderStyle: "dashed",
+    borderRadius: BorderRadius.md,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  addTaskText: { fontSize: FontSize.sm, color: Colors.dim, fontWeight: "600" },
+  limitText: { fontSize: FontSize.xs, color: Colors.dim, textAlign: "center", marginTop: 4 },
+
+  // Ad
+  adRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  adTitle: { fontSize: FontSize.sm, fontWeight: "600", color: Colors.gold },
+  adSub: { fontSize: FontSize.xs, color: Colors.dim, marginTop: 2 },
+  adArrow: { fontSize: FontSize.lg, color: Colors.gold },
 
   // Empty
-  emptyText: { fontSize: FontSize.md, color: Colors.dim, marginTop: 8 },
-  emptyHint: { fontSize: FontSize.xs, color: Colors.dim, marginTop: 4 },
-
-  // History
-  historyRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  historyDate: { fontSize: FontSize.md, color: Colors.text, fontWeight: "500" },
-  historyStats: { flexDirection: "row", gap: 10 },
-  historyChip: { fontSize: FontSize.sm, color: Colors.dim },
-
-  // FAB
-  fab: {
-    position: "absolute",
-    bottom: 24,
-    right: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.gold,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  fabText: { fontSize: 28, color: Colors.white, fontWeight: "300", marginTop: -2 },
+  emptyText: { fontSize: FontSize.sm, color: Colors.dim, marginTop: 8 },
 
   // Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
-  },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
   modalCard: {
     backgroundColor: Colors.bg,
     borderTopLeftRadius: BorderRadius.xl,
     borderTopRightRadius: BorderRadius.xl,
     padding: 24,
-    gap: 14,
+    gap: 12,
     maxHeight: "85%",
   },
   modalTitle: { fontSize: FontSize.lg, fontWeight: "700", color: Colors.gold },
-  modalActions: { flexDirection: "row", gap: 12, marginTop: 8 },
-  fieldLabel: { fontSize: FontSize.sm, color: Colors.dim, fontWeight: "500" },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    borderWidth: 1,
-    borderRadius: BorderRadius.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  modalSub: { fontSize: FontSize.sm, color: Colors.dim },
+
+  addTaskItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: 12,
   },
-  chipText: { fontSize: FontSize.sm },
-  xpChip: {
+
+  levelItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderWidth: 1,
-    borderRadius: BorderRadius.sm,
-    width: 44,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  xpChipText: { fontSize: FontSize.sm, fontWeight: "600" },
-  toggleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  toggleBox: {
-    width: 22,
-    height: 22,
-    borderWidth: 1.5,
     borderColor: Colors.border,
-    borderRadius: 4,
-    alignItems: "center",
-    justifyContent: "center",
+    borderRadius: BorderRadius.md,
+    marginTop: 6,
+    gap: 12,
   },
-  toggleCheck: { color: Colors.white, fontSize: 13, fontWeight: "700" },
-  toggleLabel: { fontSize: FontSize.md, color: Colors.text },
-  errorText: { fontSize: FontSize.sm, color: Colors.red, textAlign: "center" },
 });
