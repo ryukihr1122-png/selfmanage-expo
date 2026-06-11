@@ -65,15 +65,17 @@
     ],
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "3096e058-59ca-47bb-b78f-8228c39ac665"
       },
-      "adMobTestMode": true
+      "adMobTestMode": true,
+      "router": {}
     },
     "updates": {
       "url": ""
     },
     "runtimeVersion": {
       "policy": "appVersion"
-    }
+    },
+    "owner": "ryukihhh"
   }
 }
