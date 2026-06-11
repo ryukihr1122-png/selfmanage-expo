@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.aokiryousuke.selfmanage",
+      "bundleIdentifier": "com.ryukihara.selfmanage",
       "buildNumber": "1",
       "config": {
         "usesNonExemptEncryption": false
@@ -36,7 +36,7 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png"
       },
-      "package": "com.aokiryousuke.selfmanage",
+      "package": "com.ryukihara.selfmanage",
       "versionCode": 1
     },
     "plugins": [
