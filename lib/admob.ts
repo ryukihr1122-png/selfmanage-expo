@@ -11,41 +11,71 @@
  * 本番広告IDはAdMobアカウント取得後に差し替え。
  */
 
-// ── 広告ユニットID ──────────────────────────────────
-// TODO: AdMobアカウント取得後に本番IDに差し替え
-const AD_UNIT_IOS = "ca-app-pub-3940256099942544/1712485313"; // テスト用
-const AD_UNIT_ANDROID = "ca-app-pub-3940256099942544/5224354917"; // テスト用
-
 import { Platform } from "react-native";
+
+// ── 広告ユニットID ──────────────────────────────────
+const AD_UNIT_IOS = "ca-app-pub-3940256099942544/1712485313";
+const AD_UNIT_ANDROID = "ca-app-pub-3940256099942544/5224354917";
+
+/**
+ * ネイティブモジュールが使えるかチェック。
+ * Expo Goでは TurboModuleRegistry が見つからずエラーになるので
+ * require + 軽い呼び出しで判定する。
+ */
+let _sdkAvailable: boolean | null = null;
+
+function isAdMobAvailable(): boolean {
+  if (_sdkAvailable !== null) return _sdkAvailable;
+  try {
+    // require は成功するがネイティブモジュール参照時にエラーになるケースがある
+    const mod = require("react-native-google-mobile-ads");
+    // モジュールが存在し、default (mobileAds関数) が呼べるか確認
+    if (typeof mod?.default === "function") {
+      // さらにインスタンスが取れるかチェック（ここでTurboModuleRegistry error発生）
+      const instance = mod.default();
+      if (instance && typeof instance.initialize === "function") {
+        _sdkAvailable = true;
+        return true;
+      }
+    }
+    _sdkAvailable = false;
+    return false;
+  } catch {
+    _sdkAvailable = false;
+    return false;
+  }
+}
 
 /**
  * AdMob SDKの初期化（アプリ起動時に1回呼ぶ）
  */
 export async function initializeAdMob(): Promise<void> {
+  if (!isAdMobAvailable()) {
+    console.log("[admob] SDK not available (Expo Go mode)");
+    return;
+  }
   try {
     const { default: mobileAds } = require("react-native-google-mobile-ads");
     await mobileAds().initialize();
     console.log("[admob] SDK initialized");
-  } catch {
-    console.log("[admob] SDK not available (Expo Go mode)");
+  } catch (err) {
+    console.log("[admob] SDK init failed:", err);
   }
 }
 
 /**
  * ATT（App Tracking Transparency）リクエスト — iOS 14.5+
- * 広告IDの利用許可を求める。
  */
 export async function requestTrackingPermission(): Promise<void> {
-  if (Platform.OS !== "ios") return;
+  if (Platform.OS !== "ios" || !isAdMobAvailable()) return;
   try {
-    const { default: mobileAds, AdsConsent } = require("react-native-google-mobile-ads");
-    // ATTリクエスト
+    const { default: mobileAds } = require("react-native-google-mobile-ads");
     await mobileAds().setRequestConfiguration({
       testDeviceIdentifiers: __DEV__ ? ["EMULATOR"] : [],
     });
     console.log("[admob] Tracking permission requested");
   } catch {
-    // Expo Go — 無視
+    // ignore
   }
 }
 
@@ -57,6 +87,12 @@ export async function requestTrackingPermission(): Promise<void> {
  * Expo Goではモック（1.5秒で成功）。
  */
 export async function showRewardedAd(): Promise<boolean> {
+  if (!isAdMobAvailable()) {
+    console.log("[admob] Using mock ad (Expo Go mode)");
+    await new Promise((r) => setTimeout(r, 1500));
+    return true;
+  }
+
   try {
     const {
       RewardedAd,
@@ -65,7 +101,6 @@ export async function showRewardedAd(): Promise<boolean> {
       TestIds,
     } = require("react-native-google-mobile-ads");
 
-    // __DEV__ ならテストID、本番なら設定済みIDを使用
     const adUnitId = __DEV__
       ? TestIds.REWARDED
       : Platform.select({ ios: AD_UNIT_IOS, android: AD_UNIT_ANDROID }) ?? AD_UNIT_IOS;
@@ -85,9 +120,7 @@ export async function showRewardedAd(): Promise<boolean> {
 
       const unsubLoaded = rewarded.addAdEventListener(
         RewardedAdEventType.LOADED,
-        () => {
-          rewarded.show();
-        },
+        () => { rewarded.show(); },
       );
 
       const unsubEarned = rewarded.addAdEventListener(
@@ -120,8 +153,8 @@ export async function showRewardedAd(): Promise<boolean> {
       rewarded.load();
     });
   } catch {
-    // Expo Go or SDK unavailable — mock
-    console.log("[admob] Using mock ad (Expo Go mode)");
+    // Fallback
+    console.log("[admob] Fallback mock ad");
     await new Promise((r) => setTimeout(r, 1500));
     return true;
   }
