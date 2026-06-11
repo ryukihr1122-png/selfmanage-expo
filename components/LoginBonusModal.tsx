@@ -2,7 +2,7 @@
  * ログインボーナス表示モーダル
  */
 import React from "react";
-import { View, Text, Modal, StyleSheet } from "react-native";
+import { View, Text, Modal, TouchableOpacity, StyleSheet } from "react-native";
 import { Colors, FontSize, BorderRadius } from "@/constants/theme";
 import { RPGButton } from "./RPGButton";
 import type { LoginBonusResult } from "@/db/repository";
@@ -14,9 +14,13 @@ interface Props {
 
 export function LoginBonusModal({ bonus, onDismiss }: Props) {
   return (
-    <Modal transparent animationType="fade" visible>
-      <View style={styles.overlay}>
-        <View style={styles.card}>
+    <Modal transparent animationType="fade" visible onRequestClose={onDismiss}>
+      <TouchableOpacity
+        style={styles.overlay}
+        activeOpacity={1}
+        onPress={onDismiss}
+      >
+        <TouchableOpacity activeOpacity={1} style={styles.card}>
           <Text style={styles.icon}>🎁</Text>
           <Text style={styles.title}>ログインボーナス!</Text>
           <Text style={styles.streak}>
@@ -33,8 +37,8 @@ export function LoginBonusModal({ bonus, onDismiss }: Props) {
           </Text>
 
           <RPGButton title="受け取る" onPress={onDismiss} />
-        </View>
-      </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
     </Modal>
   );
 }
