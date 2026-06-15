@@ -70,12 +70,7 @@
       "adMobTestMode": true,
       "router": {}
     },
-    "updates": {
-      "url": ""
-    },
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "runtimeVersion": "1.0.0",
     "owner": "ryukihhh"
   }
 }
