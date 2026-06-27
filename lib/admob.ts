@@ -17,33 +17,18 @@ import { Platform } from "react-native";
 const AD_UNIT_IOS = "ca-app-pub-3940256099942544/1712485313";
 const AD_UNIT_ANDROID = "ca-app-pub-3940256099942544/5224354917";
 
-/**
- * ネイティブモジュールが使えるかチェック。
- * Expo Goでは TurboModuleRegistry が見つからずエラーになるので
- * require + 軽い呼び出しで判定する。
- */
 let _sdkAvailable: boolean | null = null;
 
 function isAdMobAvailable(): boolean {
   if (_sdkAvailable !== null) return _sdkAvailable;
   try {
-    // require は成功するがネイティブモジュール参照時にエラーになるケースがある
-    const mod = require("react-native-google-mobile-ads");
-    // モジュールが存在し、default (mobileAds関数) が呼べるか確認
-    if (typeof mod?.default === "function") {
-      // さらにインスタンスが取れるかチェック（ここでTurboModuleRegistry error発生）
-      const instance = mod.default();
-      if (instance && typeof instance.initialize === "function") {
-        _sdkAvailable = true;
-        return true;
-      }
-    }
-    _sdkAvailable = false;
-    return false;
+    const TurboModuleRegistry = require("react-native/Libraries/TurboModule/TurboModuleRegistry");
+    const nativeModule = TurboModuleRegistry.get("RNGoogleMobileAdsModule");
+    _sdkAvailable = nativeModule != null;
   } catch {
     _sdkAvailable = false;
-    return false;
   }
+  return _sdkAvailable;
 }
 
 /**
