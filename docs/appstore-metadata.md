@@ -114,7 +114,7 @@ SelfManageの初回リリース！
 | **サポートURL** | https://ryukihr1122-png.github.io/selfmanage-expo/ |
 | **プライバシーポリシーURL** | https://ryukihr1122-png.github.io/selfmanage-expo/privacy-policy.html |
 | **開発者名** | Ryuki Hara |
-| **連絡先メール** | hara.r@enfac.co.jp |
+| **連絡先メール** | ryuki.hr1122@gmail.com |
 
 ---
 
